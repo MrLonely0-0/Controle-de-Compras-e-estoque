@@ -1,0 +1,55 @@
+{
+  "name": "controle-de-compras-e-estoque",
+  "version": "1.0.0",
+  "description": "Gestão de compras e estoque para a operação Nordeschina Delivery",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "test": "node --test tests/api.test.mjs",
+    "dev": "concurrently -k \"node server/app.mjs\" \"vite --host 0.0.0.0\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "NODE_ENV=production node --env-file-if-exists=.env server/app.mjs",
+    "desktop": "electron desktop/main.cjs",
+    "preview": "SERVE_DIST=1 node server/app.mjs",
+    "seed": "node --env-file-if-exists=.env server/seed.mjs",
+    "desktop:build": "node --env-file-if-exists=.env desktop/build.mjs",
+    "bootstrap": "node --env-file-if-exists=.env server/bootstrap.mjs",
+    "test:browser": "npm run build && playwright test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque/issues"
+  },
+  "homepage": "https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque#readme",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.17",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^10.0.7",
+    "express": "^5.3.0",
+    "lucide-react": "^1.76.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "zod": "^4.6.7"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^26.6.6",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  },
+  "private": true
+}

@@ -1,0 +1,18 @@
+appId: br.com.nordeschina.estoque
+productName: Estoque e Compras
+asar: true
+npmRebuild: false
+directories:
+  output: release
+files:
+  - desktop/main.cjs
+  - "!node_modules/**/*"
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+extraResources:
+  - from: .data/desktop.json
+    to: desktop.json
