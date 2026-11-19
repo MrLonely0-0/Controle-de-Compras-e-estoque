@@ -47,6 +47,7 @@ import {
   Recipes,
   AuditView,
   UsersView,
+  RegistrationReview,
   SettingsForm,
 } from "./modules";
 import type { Command } from "./modules";
@@ -300,6 +301,8 @@ function App() {
   const [data, setData] = useState<State | null>(() => read("state", null));
   const [loading, setLoading] = useState(!data),
     [startupError, setStartupError] = useState(""),
+    [registering, setRegistering] = useState(false),
+    [registrationNotice, setRegistrationNotice] = useState(""),
     [demo, setDemo] = useState(false);
   const [page, setPage] = useState(location.hash.slice(1) || "home"),
     [side, setSide] = useState(false),
@@ -323,7 +326,7 @@ function App() {
   const refresh = useCallback(async () => {
     const v = await api<State>("state");
     setData(v);
-    store("state", { ...v, audit: [], users: [] });
+    store("state", { ...v, audit: [], users: [], registrations: [] });
     return v;
   }, []);
   const clear = () => {
@@ -369,7 +372,11 @@ function App() {
         } catch (e) {
           if ((e as { status?: number }).status !== 401) throw e;
           clear();
-          if (env.demo && !read("signedOut", false)) {
+          if (
+            env.demo &&
+            !navigator.userAgent.includes("EstoqueDesktop") &&
+            !read("signedOut", false)
+          ) {
             await api("login", {
               email: "master@nordeschina.demo",
               password: demoPassword,
@@ -482,7 +489,7 @@ function App() {
       <div className="login">
         <div className="login-card">
           <Brand />
-          <h1>Entre na sua conta</h1>
+          <h1>{registering ? "Solicitar acesso" : "Entre na sua conta"}</h1>
           <p>Gerencie o estoque e as compras do seu restaurante.</p>
           {startupError && (
             <p className="form-error">
@@ -493,12 +500,25 @@ function App() {
             </p>
           )}
           <form
+            key={registering ? "registration" : "login"}
             onSubmit={async (e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
               setBusy(true);
               setStartupError("");
               try {
+                if (registering) {
+                  if (f.get("password") !== f.get("confirmPassword"))
+                    throw new Error("As senhas não coincidem.");
+                  const result = await api<{ message: string }>("register", {
+                    name: f.get("name"),
+                    email: f.get("email"),
+                    password: f.get("password"),
+                  });
+                  setRegistrationNotice(result.message);
+                  setRegistering(false);
+                  return;
+                }
                 await api("login", {
                   email: f.get("email"),
                   password: f.get("password"),
@@ -513,6 +533,17 @@ function App() {
               }
             }}
           >
+            {registering && (
+              <Field label="Nome completo">
+                <input
+                  name="name"
+                  required
+                  minLength={2}
+                  maxLength={150}
+                  autoComplete="name"
+                />
+              </Field>
+            )}
             <Field label="E-mail">
               <input
                 name="email"
@@ -526,14 +557,46 @@ function App() {
                 name="password"
                 type="password"
                 required
-                autoComplete="current-password"
+                autoComplete={registering ? "new-password" : "current-password"}
+                minLength={registering ? 12 : undefined}
+                maxLength={128}
               />
             </Field>
+            {registering && (
+              <Field label="Confirmar senha (mínimo 12 caracteres)">
+                <input
+                  name="confirmPassword"
+                  type="password"
+                  minLength={12}
+                  maxLength={128}
+                  required
+                  autoComplete="new-password"
+                />
+              </Field>
+            )}
             <Button type="submit" kind="primary" disabled={busy}>
-              Entrar <ArrowRight size={17} />
+              {registering ? "Enviar solicitação" : "Entrar"}{" "}
+              <ArrowRight size={17} />
             </Button>
           </form>
-          {demo && (
+          {registrationNotice && (
+            <p role="status" className="info-box">
+              {registrationNotice}
+            </p>
+          )}
+          <Button
+            disabled={busy}
+            onClick={() => {
+              setRegistering(!registering);
+              setStartupError("");
+              setRegistrationNotice("");
+            }}
+          >
+            {registering
+              ? "Voltar para o login"
+              : "Não tenho conta · Solicitar acesso"}
+          </Button>
+          {demo && !registering && (
             <div className="demo-options">
               <small>CONTAS DE DEMONSTRAÇÃO</small>
               {["master", "admin", "operador", "comprador"].map((k, i) => (
@@ -970,7 +1033,12 @@ function App() {
           {view === "sales" && <Sales data={data} cmd={cmd} />}
           {view === "recipes" && <Recipes data={data} cmd={cmd} />}
           {view === "audit" && <AuditView data={data} />}
-          {view === "users" && <UsersView data={data} cmd={cmd} />}
+          {view === "users" && (
+            <div className="stack">
+              <RegistrationReview data={data} cmd={cmd} />
+              <UsersView data={data} cmd={cmd} />
+            </div>
+          )}
           <footer className="main-footer">
             <span>Estoque & Compras · Nordeschina Delivery</span>
             <span>

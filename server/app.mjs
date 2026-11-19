@@ -71,6 +71,14 @@ const sale = z.object({
   includeManual: z.boolean().default(false),
 });
 const schemas = {
+  reviewRegistration: z.discriminatedUnion("decision", [
+    z.object({
+      id: key,
+      decision: z.literal("approve"),
+      role: z.enum(["ADM", "OPERADOR", "COMPRADOR"]),
+    }),
+    z.object({ id: key, decision: z.literal("reject") }),
+  ]),
   item: z
     .object({
       id: key.optional(),
@@ -154,6 +162,7 @@ const schemas = {
   cancel: z.object({ id: key }),
 };
 const permissions = {
+  reviewRegistration: ["ADM_MASTER"],
   item: managers,
   request: stock,
   deduct: stock,
@@ -218,6 +227,40 @@ app.post("/api/login", async (r, s) => {
   ]);
   s.cookie("session", raw, { ...sessionCookie, maxAge: 604800000 });
   s.json({ id: u.id, name: u.name, role: u.role });
+});
+const registrationAttempts = new Map();
+app.post("/api/register", async (r, s) => {
+  const now = Date.now();
+  for (const [k, v] of registrationAttempts)
+    if (v.until < now) registrationAttempts.delete(k);
+  const ip = r.ip || "";
+  const attempt = registrationAttempts.get(ip) || {
+    count: 0,
+    until: now + 60000,
+  };
+  if (attempt.count++ >= 5)
+    throw fail("Muitas solicitações. Tente novamente em um minuto.", 429);
+  registrationAttempts.set(ip, attempt);
+  const b = z
+    .object({
+      name: z.string().trim().min(2).max(150),
+      email: z.email().max(150),
+      password: z.string().min(12).max(128),
+    })
+    .strict()
+    .parse(r.body);
+  const email = b.email.toLowerCase();
+  const result = await query(
+    `INSERT INTO registrations(id,name,email,password_hash)
+    SELECT $1,$2,$3,$4 WHERE NOT EXISTS (SELECT 1 FROM users WHERE email=$3)
+    ON CONFLICT DO NOTHING RETURNING id`,
+    [id(), b.name, email, hash(b.password)],
+  );
+  if (result.rows.length) await query("SELECT pg_notify('changes','{}')");
+  s.status(202).json({
+    message:
+      "Se o e-mail estiver disponível, a solicitação ficará aguardando aprovação do ADM Master.",
+  });
 });
 app.get("/api/environment", (_r, s) => s.json({ demo: !!embedded }));
 app.use("/api", async (r, _s, n) => {
@@ -309,6 +352,12 @@ app.get("/api/state", async (r, s) => {
             [role],
           )
         : [],
+      registrations:
+        role === "ADM_MASTER"
+          ? await q(
+              "SELECT id,name,email,status,created_at,reviewed_at,approved_role FROM registrations ORDER BY created_at DESC",
+            )
+          : [],
       users:
         role === "ADM_MASTER"
           ? await q("SELECT id,name,email,role,active FROM users ORDER BY name")
@@ -730,6 +779,45 @@ app.post("/api/commands/:type", async (r, s) => {
         "Regras da operação",
         old,
         n,
+      );
+    }
+    if (t === "reviewRegistration") {
+      const pending = await one(
+        c,
+        "SELECT * FROM registrations WHERE id=$1 FOR UPDATE",
+        [b.id],
+      );
+      if (pending.status !== "PENDING")
+        throw fail("Esta solicitação já foi revisada.", 409);
+      const approve = b.decision === "approve";
+      if (approve) {
+        const created = await q(
+          "INSERT INTO users(id,name,email,password_hash,role,active) VALUES($1,$2,$3,$4,$5,true) ON CONFLICT(email) DO NOTHING RETURNING id",
+          [id(), pending.name, pending.email, pending.password_hash, b.role],
+        );
+        if (!created.rows.length)
+          throw fail(
+            "Já há uma conta com esse e-mail. Use a gestão de usuários ou recuse esta solicitação.",
+            409,
+          );
+      }
+      const next = await one(
+        c,
+        "UPDATE registrations SET status=$2,approved_role=$3,password_hash=NULL,reviewed_at=now(),reviewed_by=$4 WHERE id=$1 RETURNING id,status,approved_role,reviewed_at",
+        [
+          b.id,
+          approve ? "APPROVED" : "REJECTED",
+          approve ? b.role : null,
+          u.id,
+        ],
+      );
+      await audit(
+        "UPDATE",
+        "registrations",
+        b.id,
+        pending.name,
+        { status: pending.status, email: pending.email },
+        next,
       );
     }
     if (t === "user") {

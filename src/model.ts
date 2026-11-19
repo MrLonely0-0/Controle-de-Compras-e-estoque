@@ -71,7 +71,17 @@ export type Audit = {
   device_type: string;
   created_at: string;
 };
+export type Registration = {
+  id: string;
+  name: string;
+  email: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  created_at: string;
+  reviewed_at: string | null;
+  approved_role: Role | null;
+};
 export type State = {
+  registrations: Registration[];
   user: User;
   settings: { auto_min_requests: boolean; allow_manual_in_sales: boolean };
   items: Item[];

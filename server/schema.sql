@@ -21,3 +21,11 @@ CREATE OR REPLACE FUNCTION reject_audit_change() RETURNS trigger LANGUAGE plpgsq
 CREATE OR REPLACE TRIGGER immutable_audit BEFORE UPDATE OR DELETE OR TRUNCATE ON audit_logs FOR EACH STATEMENT EXECUTE FUNCTION reject_audit_change();
 CREATE TABLE IF NOT EXISTS operation_settings (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), auto_min_requests boolean NOT NULL DEFAULT true, allow_manual_in_sales boolean NOT NULL DEFAULT true);
 INSERT INTO operation_settings(singleton) VALUES(true) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS registrations (
+  id text PRIMARY KEY, name text NOT NULL, email text NOT NULL, password_hash text,
+  status text NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+  created_at timestamptz NOT NULL DEFAULT now(), reviewed_at timestamptz,
+  reviewed_by text REFERENCES users(id), approved_role text,
+  CHECK ((status='PENDING') = (password_hash IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS registrations_pending_email_idx ON registrations(email) WHERE status='PENDING';
