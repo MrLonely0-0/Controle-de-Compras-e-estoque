@@ -1505,6 +1505,7 @@ const actions: Record<string, string> = {
   COMPLETE_PURCHASE: "Finalizou compra",
 };
 const entities: Record<string, string> = {
+  registrations: "Solicitações de acesso",
   items: "Estoque",
   purchase_requests: "Lista de compras",
   purchases: "Compras",
@@ -1830,5 +1831,95 @@ export function SettingsForm({ data, cmd }: { data: State; cmd: Command }) {
         Permitir incluir insumos manuais ao confirmar vendas
       </label>
     </Form>
+  );
+}
+
+export function RegistrationReview({
+  data,
+  cmd,
+}: {
+  data: State;
+  cmd: Command;
+}) {
+  const [review, setReview] = useState<State["registrations"][number] | null>(
+    null,
+  );
+  const requests = data.registrations ?? [];
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>Solicitações de acesso</h2>
+          <p>Escolha o perfil ao aprovar. Até lá, a pessoa não pode entrar.</p>
+        </div>
+        <Badge tone="amber">
+          {requests.filter((r) => r.status === "PENDING").length} pendente(s)
+        </Badge>
+      </div>
+      <div className="list padded">
+        {requests.map((r) => (
+          <div className="list-row" key={r.id}>
+            <div>
+              <strong>{r.name}</strong>
+              <small>
+                {r.email} · {date(r.created_at)}
+              </small>
+            </div>
+            <Badge
+              tone={
+                r.status === "PENDING"
+                  ? "amber"
+                  : r.status === "APPROVED"
+                    ? "green"
+                    : "red"
+              }
+            >
+              {r.status === "PENDING"
+                ? "Pendente"
+                : r.status === "APPROVED"
+                  ? `Aprovada · ${r.approved_role ? roleNames[r.approved_role] : ""}`
+                  : "Recusada"}
+            </Badge>
+            {r.status === "PENDING" && (
+              <Button onClick={() => setReview(r)}>Revisar</Button>
+            )}
+          </div>
+        ))}
+      </div>
+      {!requests.length && <Empty>Nenhuma solicitação recebida.</Empty>}
+      {review && (
+        <Modal title="Revisar solicitação" onClose={() => setReview(null)}>
+          <p>
+            {review.name} · {review.email}
+          </p>
+          <Form
+            label="Confirmar decisão"
+            close={() => setReview(null)}
+            save={async (f) => {
+              const role = str(f, "role");
+              await cmd(
+                "reviewRegistration",
+                role === "reject"
+                  ? { id: review.id, decision: "reject" }
+                  : { id: review.id, decision: "approve", role },
+              );
+              setReview(null);
+            }}
+          >
+            <Field label="Decisão">
+              <select name="role" defaultValue="" required>
+                <option value="" disabled>
+                  Selecione uma opção
+                </option>
+                <option value="OPERADOR">Aprovar como Operador</option>
+                <option value="COMPRADOR">Aprovar como Comprador</option>
+                <option value="ADM">Aprovar como Administrador</option>
+                <option value="reject">Recusar cadastro</option>
+              </select>
+            </Field>
+          </Form>
+        </Modal>
+      )}
+    </section>
   );
 }

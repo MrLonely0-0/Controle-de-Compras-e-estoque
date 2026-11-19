@@ -1,0 +1,41 @@
+body {
+  font:
+    15px system-ui,
+    sans-serif;
+  background: #171d2d;
+  color: #fff;
+  margin: 0;
+}
+main {
+  max-width: 460px;
+  margin: 26px auto;
+  padding: 0 18px;
+}
+p {
+  color: #d4d9e5;
+}
+form {
+  display: grid;
+  gap: 8px;
+}
+input,
+button {
+  font: inherit;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px;
+}
+button {
+  background: #f88e50;
+  color: #171d2d;
+  font-weight: 700;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+}
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid #f5a76e;
+  outline-offset: 2px;
+}

@@ -239,3 +239,71 @@ test("configurações Master e segregação da auditoria", async () => {
   });
   assert.equal(r.status, 403);
 });
+
+test("cadastro exige aprovação Master e aplica as permissões do perfil escolhido", async () => {
+  const email = "nova@nordeschina.demo",
+    password = "SenhaExemplo123!";
+  assert.equal(
+    (
+      await call("register", {
+        body: { name: "Nova Operadora", email, password },
+      })
+    ).status,
+    202,
+  );
+  assert.equal(
+    (await call("login", { body: { email, password } })).status,
+    401,
+  );
+  assert.deepEqual((await state(admin)).registrations, []);
+  const registration = (await state(master)).registrations.find(
+    (r) => r.email === email,
+  );
+  assert.equal(registration.status, "PENDING");
+  assert.equal(registration.password_hash, undefined);
+  const data = { id: registration.id, decision: "approve", role: "OPERADOR" };
+  assert.equal((await command(admin, "reviewRegistration", data)).status, 403);
+  assert.equal(
+    (
+      await command(master, "reviewRegistration", {
+        ...data,
+        role: "ADM_MASTER",
+      })
+    ).status,
+    400,
+  );
+  assert.equal((await command(master, "reviewRegistration", data)).status, 200);
+  const result = await call("login", { body: { email, password } });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.role, "OPERADOR");
+  assert.equal(
+    (await command(result.cookie, "reviewRegistration", data)).status,
+    403,
+  );
+  assert.equal((await command(master, "reviewRegistration", data)).status, 409);
+  const rejected = "recusada@nordeschina.demo";
+  assert.equal(
+    (
+      await call("register", {
+        body: { name: "Cadastro Recusado", email: rejected, password },
+      })
+    ).status,
+    202,
+  );
+  const pending = (await state(master)).registrations.find(
+    (r) => r.email === rejected,
+  );
+  assert.equal(
+    (
+      await command(master, "reviewRegistration", {
+        id: pending.id,
+        decision: "reject",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (await call("login", { body: { email: rejected, password } })).status,
+    401,
+  );
+});

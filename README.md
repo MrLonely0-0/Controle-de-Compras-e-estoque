@@ -112,3 +112,24 @@ npm run test:browser            # build, shell offline, carrinho e navegação m
 ```
 
 Para executar a mesma suíte de API no PostgreSQL, configure `TEST_DATABASE_URL` apontando **exclusivamente a um banco descartável e vazio**. A suíte cria schema, aplica seed e grava compras. A geração e a instalação do `.exe` exigem validação em Windows antes da distribuição.
+
+## Hospedagem recomendada para ficar online
+
+**Render: Web Service pago + Render Postgres pago**, ambos na mesma região, é a opção mais simples para esta operação. Não há servidor próprio para manter. Escolha uma região disponível próxima de Recife e confira, no painel, os preços, retenção de backup e limites dos planos antes de contratar. Não use a combinação gratuita para operação diária: ela não é a configuração adequada para evitar suspensão do serviço e garantir a permanência do banco. O Render fornece HTTPS para o endereço `onrender.com`; um domínio próprio é opcional.
+
+1. Crie um **Render Postgres** e guarde a _Internal Database URL_ para uso no Web Service. Use a conexão direta para `LISTEN/NOTIFY`.
+2. Crie um **Web Service** a partir do repositório com runtime **Node**, na mesma região do banco. Use `npm ci && npm run build` no build e `npm start` no start. Configure `DATABASE_URL` com a URL interna do banco e deixe o Render definir `PORT`. Use Node 22.12+ (preferencialmente a versão 22 LTS mais recente). Não use `npm run preview` na nuvem.
+3. Faça o deploy. No Shell do Web Service, execute `npm run bootstrap` com `MASTER_NAME`, `MASTER_EMAIL` e `MASTER_PASSWORD` definidos temporariamente como segredos. Remova a senha de bootstrap depois que a primeira conta existir.
+4. Abra o HTTPS em dois dispositivos. Confirme que a compra criada em um aparece no outro e valide cadastro, aprovação e login antes de distribuir o instalador. Configure backups e teste a restauração. Arquivos do serviço e do instalador não substituem o backup do PostgreSQL.
+
+Alternativa: **Railway** com serviço Node e PostgreSQL na mesma rede privada. Compare custo, backup e região antes de decidir. Evite publicar apenas o front-end como site estático: o app também precisa da API Node persistente.
+
+### Cadastro e aprovação
+
+No login web ou Windows, selecione **Não tenho conta · Solicitar acesso**. Até a aprovação, não é criada uma conta ativa. Em **Usuários e acesso → Solicitações de acesso**, o ADM Master pode recusar ou aprovar como **Operador**, **Comprador** ou **Administrador**. As permissões e restrições do perfil escolhido são aplicadas pelo servidor no primeiro login. A revisão não concede ADM Master. Não há e-mail automático nem verificação de propriedade do endereço: confirme a identidade do solicitante por um canal interno antes de aprovar.
+
+### Gerar e baixar o instalador
+
+No Windows, `npm ci` e `npm run desktop:build` geram o instalador NSIS em `release/`. Com `ESTOQUE_URL` definida, ele abre o servidor diretamente. Sem ela, a primeira execução pede a URL HTTPS e salva somente o endereço, não a senha. Depois disso, o usuário entra ou solicita cadastro. A sessão pode persistir após fechar e reabrir o programa; use **Sair** em computadores compartilhados.
+
+No GitHub, após o workflow estar na branch padrão, abra **Actions → Build Windows installer → Run workflow**. O campo `server_url` pode ficar vazio para gerar o instalador genérico. Baixe o artefato **Estoque-e-Compras-Windows** da execução concluída, extraia o `.exe` e faça um teste em Windows antes de distribuí-lo. Sem assinatura de código, o Windows pode exibir um aviso de editor desconhecido.

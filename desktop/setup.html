@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'"
+    />
+    <title>Conectar ao servidor • Estoque & Compras</title>
+    <link rel="stylesheet" href="setup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Conectar ao servidor</h1>
+      <p>
+        Informe o endereço HTTPS fornecido pelo administrador. Em seguida, entre
+        na sua conta ou solicite acesso.
+      </p>
+      <form>
+        <label for="url">Endereço do servidor</label
+        ><input
+          id="url"
+          type="url"
+          required
+          placeholder="https://estoque.seudominio.com.br"
+        /><button>Conectar</button>
+        <p id="status" role="status"></p>
+      </form>
+    </main>
+    <script src="setup.js"></script>
+  </body>
+</html>
