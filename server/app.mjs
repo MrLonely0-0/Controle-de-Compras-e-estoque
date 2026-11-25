@@ -265,6 +265,12 @@ app.post("/api/register", async (r, s) => {
   });
 });
 app.get("/api/environment", (_r, s) => s.json({ demo: !!embedded }));
+// Configured by the administrator when a new desktop installer is published.
+// Only stable numeric versions are accepted; no credentials or user input are exposed.
+app.get("/api/desktop-version", (_r, s) => {
+  const version = process.env.DESKTOP_LATEST_VERSION || "";
+  s.json({ version: /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ? version : null });
+});
 app.use("/api", async (r, _s, n) => {
   const raw = cookie(r);
   if (!raw) throw fail("Entre para continuar.", 401);

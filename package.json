@@ -1,6 +1,6 @@
 {
   "name": "controle-de-compras-e-estoque",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Gestão de compras e estoque para a operação Nordeschina Delivery",
   "main": "desktop/main.cjs",
   "scripts": {
