@@ -40,8 +40,13 @@ const prefs = {
   sandbox: true,
   webSecurity: true,
 };
-function guard(win, allowed) {
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+function guard(win, allowed, allowProfile = false) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    // Only the exact, trusted footer link may open in the system browser.
+    if (allowProfile && url === "https://github.com/MrLonely0-0")
+      void shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
   for (const event of ["will-navigate", "will-redirect"])
     win.webContents.on(event, (e, target) => {
       if (!allowed(target)) e.preventDefault();
@@ -119,7 +124,7 @@ function openServer(url) {
     autoHideMenuBar: true,
     webPreferences: prefs,
   });
-  guard(win, (target) => new URL(target).origin === url.origin);
+  guard(win, (target) => new URL(target).origin === url.origin, true);
   win.webContents.setUserAgent(
     `${win.webContents.getUserAgent()} EstoqueDesktop`,
   );

@@ -150,3 +150,5 @@ Para publicar uma versão desktop:
 4. Após verificar o download, em **Render → Web Service → Environment**, configure `DESKTOP_LATEST_VERSION=1.0.2` (sem `v`) e faça o deploy. Use exatamente a versão do `package.json` da release.
 
 A partir do desktop 1.0.1, ao abrir o servidor o programa verifica a versão anunciada e, se for maior, oferece abrir a página de releases no navegador. A instalação continua manual; o app não baixa nem executa atualizações automaticamente. A versão 1.0.0 não tem essa função, portanto precisa ser atualizada manualmente uma primeira vez. Repositório privado exige login e permissão no GitHub. Sem variável válida ou sem conexão, nenhum aviso aparece. O instalador é não assinado e deve ser validado em Windows antes de ser distribuído.
+
+O rodapé contém o crédito de Vinícius Emanuel com link para seu perfil no GitHub. O instalador Windows registra o editor como `Vinícius Emanuel - Mr.Lonley` e usa o mesmo perfil do GitHub para informações e ajuda no Painel de Controle. Esses metadados não substituem uma assinatura digital de código; o Windows ainda pode indicar editor desconhecido no aviso de segurança.

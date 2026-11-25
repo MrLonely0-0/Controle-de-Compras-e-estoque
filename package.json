@@ -1,6 +1,6 @@
 {
   "name": "controle-de-compras-e-estoque",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Gestão de compras e estoque para a operação Nordeschina Delivery",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -20,7 +20,10 @@
     "url": "git+https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque.git"
   },
   "keywords": [],
-  "author": "",
+  "author": {
+    "name": "Vinícius Emanuel - Mr.Lonley",
+    "url": "https://github.com/MrLonely0-0"
+  },
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque/issues"
