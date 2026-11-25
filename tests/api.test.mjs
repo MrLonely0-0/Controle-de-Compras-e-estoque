@@ -307,3 +307,21 @@ test("cadastro exige aprovação Master e aplica as permissões do perfil escolh
     401,
   );
 });
+
+test("exclusão de usuário revoga sessões e preserva auditoria", async () => {
+  const email = `exclusao-${randomUUID()}@example.com`;
+  assert.equal((await command(master, "user", { name: "Conta removível", email, password: "SenhaMuitoSegura123!", role: "OPERADOR", active: true })).status, 200);
+  const target = (await state(master)).users.find((u) => u.email === email);
+  assert.ok(target);
+  const login = await call("login", { body: { email, password: "SenhaMuitoSegura123!" } });
+  assert.equal(login.status, 200);
+  assert.equal((await command(operator, "deleteUser", { id: target.id })).status, 403);
+  assert.equal((await command(master, "deleteUser", { id: (await state(master)).user.id })).status, 400);
+  assert.equal((await command(master, "deleteUser", { id: target.id })).status, 200);
+  assert.equal((await call("state", { cookie: login.cookie })).status, 401);
+  assert.equal((await call("login", { body: { email, password: "SenhaMuitoSegura123!" } })).status, 401);
+  const updated = await state(master);
+  assert.equal(updated.users.some((u) => u.id === target.id), false);
+  assert.ok(updated.audit.some((a) => a.entity_id === target.id && a.action === "DELETE"));
+  assert.equal((await command(master, "user", { id: target.id, name: "Reativação", email, role: "OPERADOR", active: true })).status, 404);
+});

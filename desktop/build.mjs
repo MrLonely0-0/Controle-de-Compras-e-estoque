@@ -17,6 +17,8 @@ const config = ".data/desktop.json";
 await writeFile(config, JSON.stringify({ url: url?.href ?? null }));
 try {
   await build({
+    // CI uploads the installer as an artifact; do not attempt GitHub release publishing.
+    publish: "never",
     targets: Platform.WINDOWS.createTarget(["nsis"]),
     config: "electron-builder.yml",
   });

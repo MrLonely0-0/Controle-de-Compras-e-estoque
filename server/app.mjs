@@ -158,6 +158,7 @@ const schemas = {
     allowManualInSales: z.boolean(),
   }),
   deleteItem: z.object({ id: key }),
+  deleteUser: z.object({ id: key }),
   claim: z.object({ id: key, claimed: z.boolean() }),
   cancel: z.object({ id: key }),
 };
@@ -173,6 +174,7 @@ const permissions = {
   user: ["ADM_MASTER"],
   settings: ["ADM_MASTER"],
   deleteItem: ["ADM_MASTER"],
+  deleteUser: ["ADM_MASTER"],
   claim: buyers,
   cancel: managers,
 };
@@ -360,7 +362,7 @@ app.get("/api/state", async (r, s) => {
           : [],
       users:
         role === "ADM_MASTER"
-          ? await q("SELECT id,name,email,role,active FROM users ORDER BY name")
+          ? await q("SELECT id,name,email,role,active FROM users WHERE deleted_at IS NULL ORDER BY name")
           : [],
     };
   });
@@ -820,12 +822,25 @@ app.post("/api/commands/:type", async (r, s) => {
         next,
       );
     }
+    if (t === "deleteUser" || t === "user") {
+      await q("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE");
+      const actor = await one(c, "SELECT role,active,deleted_at FROM users WHERE id=$1", [u.id]);
+      if (!actor.active || actor.deleted_at || actor.role !== "ADM_MASTER")
+        throw fail("Sem permissão.", 403);
+    }
+    if (t === "deleteUser") {
+      if (b.id === u.id) throw fail("Você não pode excluir sua própria conta.");
+      const old = await one(c, "SELECT id,name,email,role,active FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", [b.id]);
+      await q("UPDATE users SET active=false, deleted_at=now() WHERE id=$1", [b.id]);
+      await q("DELETE FROM sessions WHERE user_id=$1", [b.id]);
+      await audit("DELETE", "users", b.id, old.name, old, { active: false, deleted: true });
+    }
     if (t === "user") {
       const k = b.id || id(),
         old = b.id
           ? await one(
               c,
-              "SELECT id,name,email,role,active FROM users WHERE id=$1 FOR UPDATE",
+              "SELECT id,name,email,role,active FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",
               [k],
             )
           : null;
