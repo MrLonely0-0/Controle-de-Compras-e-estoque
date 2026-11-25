@@ -63,7 +63,8 @@ function openSetup() {
     const url = serverUrl(String(value).trim());
     const check = await fetch(new URL("/api/environment", url), {
       redirect: "error",
-      signal: AbortSignal.timeout(10000),
+      // Render Free may take a minute to wake after inactivity.
+      signal: AbortSignal.timeout(90000),
     }).catch(() => null);
     if (!check?.ok || (await check.json().catch(() => null))?.demo !== false)
       throw new Error(

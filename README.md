@@ -133,3 +133,7 @@ No login web ou Windows, selecione **Não tenho conta · Solicitar acesso**. At�
 No Windows, `npm ci` e `npm run desktop:build` geram o instalador NSIS em `release/`. Com `ESTOQUE_URL` definida, ele abre o servidor diretamente. Sem ela, a primeira execução pede a URL HTTPS e salva somente o endereço, não a senha. Depois disso, o usuário entra ou solicita cadastro. A sessão pode persistir após fechar e reabrir o programa; use **Sair** em computadores compartilhados.
 
 No GitHub, após o workflow estar na branch padrão, abra **Actions → Build Windows installer → Run workflow**. O campo `server_url` pode ficar vazio para gerar o instalador genérico. Baixe o artefato **Estoque-e-Compras-Windows** da execução concluída, extraia o `.exe` e faça um teste em Windows antes de distribuí-lo. Sem assinatura de código, o Windows pode exibir um aviso de editor desconhecido.
+
+### Exclusão de contas
+
+Em **Usuários e acesso**, o ADM Master pode excluir uma conta da lista. A exclusão é lógica: desativa o acesso e encerra as sessões, mas preserva compras, solicitações e auditoria. Não é possível excluir a própria conta; o e-mail de uma conta excluída permanece reservado. Este recurso não implementa isolamento por filiais.

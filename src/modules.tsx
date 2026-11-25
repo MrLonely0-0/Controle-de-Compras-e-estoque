@@ -1726,6 +1726,14 @@ export function UsersView({ data, cmd }: { data: State; cmd: Command }) {
               <Button onClick={() => setEdit(u)}>
                 <Pencil size={15} /> Editar
               </Button>
+              {u.id !== data.user.id && (
+                <Button onClick={() => {
+                  if (window.confirm(`Excluir o acesso de ${u.name}? O histórico será preservado.`))
+                    void cmd("deleteUser", { id: u.id });
+                }}>
+                  <Trash2 size={15} /> Excluir
+                </Button>
+              )}
             </div>
           ))}
         </div>
