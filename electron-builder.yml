@@ -13,6 +13,9 @@ win:
 nsis:
   oneClick: false
   perMachine: false
+  uninstallUrlHelp: https://github.com/MrLonely0-0
+  uninstallUrlInfoAbout: https://github.com/MrLonely0-0
+  uninstallUrlUpdateInfo: https://github.com/MrLonely0-0
 extraResources:
   - from: .data/desktop.json
     to: desktop.json

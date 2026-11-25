@@ -325,3 +325,19 @@ test("exclusão de usuário revoga sessões e preserva auditoria", async () => {
   assert.ok(updated.audit.some((a) => a.entity_id === target.id && a.action === "DELETE"));
   assert.equal((await command(master, "user", { id: target.id, name: "Reativação", email, role: "OPERADOR", active: true })).status, 404);
 });
+
+test("versão disponível do desktop é pública e ignora valores inválidos", async () => {
+  const r = await call("desktop-version");
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { version: null });
+});
+
+test("comparação de versões de desktop", async () => {
+  const { newerVersion } = await import("../desktop/update.cjs");
+  assert.equal(newerVersion("1.10.0", "1.9.0"), true);
+  assert.equal(newerVersion("2.0.0", "1.99.99"), true);
+  assert.equal(newerVersion("1.0.0", "1.0.0"), false);
+  assert.equal(newerVersion("0.9.0", "1.0.0"), false);
+  assert.equal(newerVersion("1.0.1-beta", "1.0.0"), false);
+  assert.equal(newerVersion("1.00.1", "1.0.0"), false);
+});

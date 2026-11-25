@@ -53,6 +53,20 @@ import {
 import type { Command } from "./modules";
 import "./style.css";
 const demoPassword = "Nordeschina2026!";
+const desktopDownloads = "https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque/releases/latest";
+const inDesktop = navigator.userAgent.includes("EstoqueDesktop");
+function AppFooter() {
+  return (
+    <footer className="app-footer">
+      © {new Date().getFullYear()}{" "}
+      <a href="https://github.com/MrLonely0-0" target="_blank" rel="noopener noreferrer">Vinícius Emanuel</a>
+    </footer>
+  );
+}
+function DesktopDownload() {
+  if (inDesktop) return null;
+  return <a className="desktop-download" href={desktopDownloads} target="_blank" rel="noopener noreferrer"><FileDown size={17} /> Baixar app para Windows</a>;
+}
 const manager: Role[] = ["ADM_MASTER", "ADM"];
 const buyer: Role[] = [...manager, "COMPRADOR"];
 const stock: Role[] = [...manager, "OPERADOR"];
@@ -596,6 +610,7 @@ function App() {
               ? "Voltar para o login"
               : "Não tenho conta · Solicitar acesso"}
           </Button>
+          <DesktopDownload />
           {demo && !registering && (
             <div className="demo-options">
               <small>CONTAS DE DEMONSTRAÇÃO</small>
@@ -626,6 +641,7 @@ function App() {
               ))}
             </div>
           )}
+          <AppFooter />
         </div>
       </div>
     );
@@ -720,6 +736,7 @@ function App() {
           })}
         </nav>
         <div className="side-bottom">
+          <DesktopDownload />
           <button onClick={() => setDialog({ type: "settings" })}>
             <Settings size={18} /> Configurações
           </button>
@@ -1039,12 +1056,7 @@ function App() {
               <UsersView data={data} cmd={cmd} />
             </div>
           )}
-          <footer className="main-footer">
-            <span>Estoque & Compras · Nordeschina Delivery</span>
-            <span>
-              {demo ? "Ambiente de demonstração" : "Operação · Recife, PE"}
-            </span>
-          </footer>
+          <AppFooter />
         </main>
       </div>
       {dialog?.type === "item" && (

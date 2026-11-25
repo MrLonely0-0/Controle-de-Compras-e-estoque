@@ -1,4 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { newerVersion } = require("./update.cjs");
+const releasesUrl = "https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque/releases/latest";
 const { readFileSync, writeFileSync, mkdirSync } = require("node:fs");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -38,8 +40,13 @@ const prefs = {
   sandbox: true,
   webSecurity: true,
 };
-function guard(win, allowed) {
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+function guard(win, allowed, allowProfile = false) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    // Only the exact, trusted footer link may open in the system browser.
+    if (allowProfile && url === "https://github.com/MrLonely0-0")
+      void shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
   for (const event of ["will-navigate", "will-redirect"])
     win.webContents.on(event, (e, target) => {
       if (!allowed(target)) e.preventDefault();
@@ -83,6 +90,30 @@ function openSetup() {
   win.on("closed", () => ipcMain.removeHandler("setup:save"));
   void win.loadFile(setupPath);
 }
+async function checkDesktopUpdate(win, url) {
+  try {
+    const response = await fetch(new URL("/api/desktop-version", url), {
+      redirect: "error",
+      signal: AbortSignal.timeout(90000),
+    });
+    if (!response.ok) return;
+    const { version } = await response.json();
+    if (typeof version !== "string" || !newerVersion(version, app.getVersion()) || win.isDestroyed()) return;
+    const result = await dialog.showMessageBox(win, {
+      type: "info",
+      title: "Atualização disponível",
+      message: `Uma nova versão do aplicativo Windows (${version}) está disponível.`,
+      detail: "Abra a página de downloads e instale a nova versão. Enquanto o repositório for privado, será necessário entrar no GitHub com acesso autorizado.",
+      buttons: ["Abrir downloads", "Depois"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (result.response === 0) await shell.openExternal(releasesUrl);
+  } catch (error) {
+    // Offline or an older server: do not interrupt use of the app.
+    console.warn("Não foi possível verificar atualização do aplicativo.", error.message);
+  }
+}
 function openServer(url) {
   const win = new BrowserWindow({
     width: 1360,
@@ -93,10 +124,11 @@ function openServer(url) {
     autoHideMenuBar: true,
     webPreferences: prefs,
   });
-  guard(win, (target) => new URL(target).origin === url.origin);
+  guard(win, (target) => new URL(target).origin === url.origin, true);
   win.webContents.setUserAgent(
     `${win.webContents.getUserAgent()} EstoqueDesktop`,
   );
+  win.webContents.once("did-finish-load", () => void checkDesktopUpdate(win, url));
   void win.loadURL(url.href).catch((e) => {
     if (win.isDestroyed()) return;
     const selection = dialog.showMessageBoxSync(win, {
