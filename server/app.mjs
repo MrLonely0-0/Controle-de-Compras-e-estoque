@@ -35,16 +35,6 @@ const roles = ["ADM_MASTER", "ADM", "OPERADOR", "COMPRADOR"];
 const managers = roles.slice(0, 2),
   stock = [...managers, "OPERADOR"],
   buyers = [...managers, "COMPRADOR"];
-const category = z.enum([
-  "Embalagens",
-  "Proteínas",
-  "Hortifrúti",
-  "Mercearia",
-  "Bebidas",
-  "Molhos",
-  "Limpeza",
-  "Descartáveis",
-]);
 const unit = z.enum(["un", "kg", "g", "L", "ml", "cx", "pct"]);
 const qty = z
   .number()
@@ -59,9 +49,11 @@ const cents = z.number().int().min(0).max(100000000);
 const text = z.string().trim().min(1).max(150);
 const key = z.string().min(1).max(100);
 const notes = z.string().max(500).default("");
+const salesChannel = z.enum(["Consumer", "MenuDino", "99Food", "iFood"]);
 const sale = z.object({
-  channel: z.enum(["MenuDino", "99Food", "iFood"]),
-  externalId: text,
+  channel: salesChannel,
+  channels: z.array(salesChannel).min(1).max(4).optional(),
+  externalId: z.string().trim().max(150).default(""),
   lines: z
     .array(
       z.object({ code: text, quantity: z.number().int().min(1).max(10000) }),
@@ -69,7 +61,7 @@ const sale = z.object({
     .min(1)
     .max(200),
   includeManual: z.boolean().default(false),
-});
+}).refine((value) => !value.channels || (new Set(value.channels).size === value.channels.length && value.channels[0] === value.channel), "Selecione canais sem repetição.");
 const schemas = {
   reviewRegistration: z.discriminatedUnion("decision", [
     z.object({
@@ -84,7 +76,8 @@ const schemas = {
       id: key.optional(),
       version: z.iso.datetime().optional(),
       name: text,
-      category,
+      pdvCode: z.string().trim().max(150).optional(),
+      category: text,
       unit,
       current: qty,
       min: qty,
@@ -106,17 +99,13 @@ const schemas = {
   location: z.object({
     id: key.optional(),
     name: text,
-    type: z.enum([
-      "Atacarejo",
-      "Supermercado",
-      "Distribuidora",
-      "Açougue",
-      "Embalagens",
-      "Hortifrúti",
-    ]),
+    type: text,
     neighborhood: text,
+    address: z.string().trim().max(300).optional(),
+    latitude: z.number().min(-90).max(90).nullable().optional(),
+    longitude: z.number().min(-180).max(180).nullable().optional(),
     notes,
-  }),
+  }).refine((value) => (value.latitude == null) === (value.longitude == null), "Informe latitude e longitude juntas."),
   purchase: z.object({
     locationId: key,
     discount: cents,
@@ -158,13 +147,21 @@ const schemas = {
     allowManualInSales: z.boolean(),
   }),
   deleteItem: z.object({ id: key }),
+  importStock: z.object({ rows: z.array(z.object({
+    itemId: key.nullable(), name: text, pdvCode: z.string().trim().max(150).default(""),
+    category: text, unit, quantity: positive,
+  })).min(1).max(200) }),
+  categoryCreate: z.object({ name: text }),
+  categoryDelete: z.object({ name: text }),
+  deleteUser: z.object({ id: key }),
   claim: z.object({ id: key, claimed: z.boolean() }),
   cancel: z.object({ id: key }),
 };
 const permissions = {
   reviewRegistration: ["ADM_MASTER"],
   item: managers,
-  request: stock,
+  importStock: managers,
+  request: roles,
   deduct: stock,
   location: buyers,
   purchase: buyers,
@@ -173,6 +170,9 @@ const permissions = {
   user: ["ADM_MASTER"],
   settings: ["ADM_MASTER"],
   deleteItem: ["ADM_MASTER"],
+  categoryCreate: managers,
+  categoryDelete: managers,
+  deleteUser: ["ADM_MASTER"],
   claim: buyers,
   cancel: managers,
 };
@@ -204,7 +204,11 @@ app.post("/api/login", async (r, s) => {
   for (const [k, v] of attempts) if (v.until < now) attempts.delete(k);
   const ip = r.ip || "";
   const a = attempts.get(ip) || { count: 0, until: now + 60000 };
-  if (a.count++ >= 10) throw fail("Muitas tentativas. Aguarde um minuto.", 429);
+  if (a.count++ >= 10) {
+    if (a.count === 11) await query("INSERT INTO security_events(id,kind) VALUES($1,'LOGIN_THROTTLED')", [id()]);
+    attempts.set(ip, a);
+    throw fail("Muitas tentativas. Aguarde um minuto.", 429);
+  }
   attempts.set(ip, a);
   const b = z
     .object({
@@ -217,14 +221,17 @@ app.post("/api/login", async (r, s) => {
       b.email.toLowerCase(),
     ])
   ).rows[0];
-  if (!u || !verify(b.password, u.password_hash))
+  if (!u || !verify(b.password, u.password_hash)) {
+    await query("INSERT INTO security_events(id,kind) VALUES($1,'LOGIN_FAILURE')", [id()]);
     throw fail("E-mail ou senha inválidos.", 401);
+  }
   attempts.delete(ip);
   const raw = randomBytes(32).toString("hex");
   await query("INSERT INTO sessions VALUES($1,$2,now()+interval '7 days')", [
     signature(raw),
     u.id,
   ]);
+  await query("INSERT INTO security_events(id,kind,user_id) VALUES($1,'LOGIN_SUCCESS',$2)", [id(), u.id]);
   s.cookie("session", raw, { ...sessionCookie, maxAge: 604800000 });
   s.json({ id: u.id, name: u.name, role: u.role });
 });
@@ -263,6 +270,12 @@ app.post("/api/register", async (r, s) => {
   });
 });
 app.get("/api/environment", (_r, s) => s.json({ demo: !!embedded }));
+// Configured by the administrator when a new desktop installer is published.
+// Only stable numeric versions are accepted; no credentials or user input are exposed.
+app.get("/api/desktop-version", (_r, s) => {
+  const version = process.env.DESKTOP_LATEST_VERSION || "";
+  s.json({ version: /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ? version : null });
+});
 app.use("/api", async (r, _s, n) => {
   const raw = cookie(r);
   if (!raw) throw fail("Entre para continuar.", 401);
@@ -279,12 +292,29 @@ async function oneOrUnauthorized(raw) {
   if (!u) throw fail("Sessão expirada.", 401);
   return u;
 }
+app.get("/api/security", async (r, s) => {
+  if (r.user.role !== "ADM_MASTER") throw fail("Sem permissão.", 403);
+  const [summary, events] = await Promise.all([
+    query(`SELECT
+      (SELECT count(*)::int FROM users WHERE active AND deleted_at IS NULL) active_users,
+      (SELECT count(*)::int FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.expires_at>now() AND u.active AND u.deleted_at IS NULL) active_sessions,
+      (SELECT count(*)::int FROM security_events WHERE kind='LOGIN_FAILURE' AND created_at > now()-interval '24 hours') failed_logins,
+      (SELECT count(*)::int FROM security_events WHERE kind='LOGIN_THROTTLED' AND created_at > now()-interval '24 hours') throttled_logins,
+      (SELECT count(*)::int FROM registrations WHERE status='PENDING') pending_registrations`),
+    query(`SELECT e.kind,e.created_at,u.name FROM security_events e LEFT JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 50`),
+  ]);
+  s.json({ summary: summary.rows[0], events: events.rows });
+});
 app.post("/api/logout", async (r, s) => {
   await query("DELETE FROM sessions WHERE token=$1", [signature(cookie(r))]);
   s.clearCookie("session", sessionCookie).json({ ok: true });
 });
 const streams = new Set();
 await migrate();
+// Limit retention; failed attempts never include passwords, e-mail addresses or IPs.
+const pruneSecurityEvents = () => query("DELETE FROM security_events WHERE created_at < now() - interval '30 days'").catch((error) => console.error("Falha ao expirar eventos de segurança:", error.message));
+await pruneSecurityEvents();
+setInterval(pruneSecurityEvents, 60 * 60 * 1000).unref();
 if (embedded) await seed("Nordeschina2026!");
 await listenChanges(() => {
   for (const s of streams) s.write("event: change\ndata: {}\n\n");
@@ -317,6 +347,7 @@ app.get("/api/state", async (r, s) => {
     const q = async (sql, p = []) => (await c.query(sql, p)).rows;
     return {
       user: r.user,
+      categories: (await q("SELECT name FROM category_catalog ORDER BY name")).map((row) => row.name),
       settings: (
         await q(
           "SELECT auto_min_requests,allow_manual_in_sales FROM operation_settings",
@@ -360,7 +391,7 @@ app.get("/api/state", async (r, s) => {
           : [],
       users:
         role === "ADM_MASTER"
-          ? await q("SELECT id,name,email,role,active FROM users ORDER BY name")
+          ? await q("SELECT id,name,email,role,active FROM users WHERE deleted_at IS NULL ORDER BY name")
           : [],
     };
   });
@@ -512,6 +543,40 @@ app.post("/api/commands/:type", async (r, s) => {
       await audit(action, "items", i.id, i.name, i, { ...n, notes: note });
       return n;
     };
+    if (t === "importStock") {
+      const targets = b.rows.filter((row) => row.itemId).map((row) => row.itemId);
+      const codes = b.rows.filter((row) => row.pdvCode).map((row) => row.pdvCode);
+      if (new Set(targets).size !== targets.length || new Set(codes).size !== codes.length)
+        throw fail("A planilha contém itens ou códigos PDV repetidos. Agrupe as quantidades antes de importar.");
+      for (const row of [...b.rows].sort((a, b) => (a.itemId || a.pdvCode).localeCompare(b.itemId || b.pdvCode))) {
+        if (row.itemId) {
+          const old = await getItem(row.itemId);
+          if (!old.active) throw fail(`Insumo inativo: ${old.name}.`, 409);
+          if (old.unit !== row.unit) throw fail(`Unidade diferente para ${old.name}; revise a planilha.`, 409);
+          if (row.pdvCode && old.pdv_code && old.pdv_code !== row.pdvCode) throw fail(`O código PDV de ${old.name} mudou. Revise o vínculo.`, 409);
+          if (row.pdvCode && !old.pdv_code) {
+            const linked = await one(c, "UPDATE items SET pdv_code=$2 WHERE id=$1 RETURNING *", [old.id, row.pdvCode]);
+            await audit("UPDATE", "items", old.id, old.name, old, linked);
+          }
+          await auto(await change(await getItem(row.itemId), row.quantity, "UPDATE", "Entrada por planilha"));
+        } else {
+          const k = id();
+          const created = await one(c, "INSERT INTO items(id,name,pdv_code,category,unit,current_stock,min_stock,ideal_stock,deduction_mode,active) VALUES($1,$2,$3,$4,$5,$6,0,0,'MANUAL',true) RETURNING *", [k, row.name, row.pdvCode || null, row.category, row.unit, row.quantity]);
+          await audit("CREATE", "items", k, row.name, null, created);
+        }
+      }
+    }
+    if (t === "categoryCreate") {
+      const existing = await q("SELECT name FROM category_catalog WHERE lower(name)=lower($1)", [b.name]);
+      if (existing.rows.length) throw fail("Categoria já cadastrada.", 409);
+      await q("INSERT INTO category_catalog(name) VALUES($1)", [b.name]);
+      await audit("CREATE", "categories", b.name, b.name, null, { name: b.name });
+    }
+    if (t === "categoryDelete") {
+      const found = await q("DELETE FROM category_catalog WHERE name=$1 AND NOT EXISTS (SELECT 1 FROM items WHERE category=$1) RETURNING name", [b.name]);
+      if (!found.rows.length) throw fail("Categoria inexistente ou vinculada a insumos. Altere os insumos antes de excluir.", 409);
+      await audit("DELETE", "categories", b.name, b.name, { name: b.name }, null);
+    }
     if (t === "item") {
       const k = b.id || id(),
         old = b.id ? await getItem(k) : null;
@@ -535,7 +600,7 @@ app.post("/api/commands/:type", async (r, s) => {
         );
       const n = await one(
         c,
-        `INSERT INTO items VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now()) ON CONFLICT(id) DO UPDATE SET name=$2,category=$3,unit=$4,current_stock=$5,min_stock=$6,ideal_stock=$7,deduction_mode=$8,active=$9,updated_at=now() RETURNING *`,
+        `INSERT INTO items(id,name,category,unit,current_stock,min_stock,ideal_stock,deduction_mode,active,updated_at,pdv_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),$10) ON CONFLICT(id) DO UPDATE SET name=$2,category=$3,unit=$4,current_stock=$5,min_stock=$6,ideal_stock=$7,deduction_mode=$8,active=$9,updated_at=now(),pdv_code=$10 RETURNING *`,
         [
           k,
           b.name,
@@ -546,6 +611,7 @@ app.post("/api/commands/:type", async (r, s) => {
           b.ideal,
           b.mode,
           b.active,
+          b.pdvCode === undefined ? (old?.pdv_code ?? null) : (b.pdvCode || null),
         ],
       );
       await audit(old ? "UPDATE" : "CREATE", "items", k, b.name, old, n);
@@ -557,6 +623,7 @@ app.post("/api/commands/:type", async (r, s) => {
       await audit("DELETE", "items", i.id, i.name, i, null);
     }
     if (t === "request") {
+      if (b.remaining !== undefined && !stock.includes(u.role)) throw fail("Sem permissão para alterar o saldo do estoque.", 403);
       const i = await getItem(b.itemId);
       if (!i.active) throw fail("Insumo inativo.");
       if (b.remaining !== undefined) {
@@ -593,8 +660,8 @@ app.post("/api/commands/:type", async (r, s) => {
           : null;
       const n = await one(
         c,
-        `INSERT INTO locations(id,name,type,neighborhood_city,notes) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET name=$2,type=$3,neighborhood_city=$4,notes=$5 RETURNING *`,
-        [k, b.name, b.type, b.neighborhood, b.notes],
+        `INSERT INTO locations(id,name,type,neighborhood_city,notes,address,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET name=$2,type=$3,neighborhood_city=$4,notes=$5,address=$6,latitude=$7,longitude=$8 RETURNING *`,
+        [k, b.name, b.type, b.neighborhood, b.notes, b.address ?? old?.address ?? "", b.latitude === undefined ? (old?.latitude ?? null) : b.latitude, b.longitude === undefined ? (old?.longitude ?? null) : b.longitude],
       );
       await audit(old ? "UPDATE" : "CREATE", "locations", k, b.name, old, n);
     }
@@ -717,12 +784,16 @@ app.post("/api/commands/:type", async (r, s) => {
       );
     }
     if (t === "sale") {
+      const channels = b.channels || [b.channel];
+      await q("LOCK TABLE sales_deductions IN SHARE ROW EXCLUSIVE MODE");
+      if (b.externalId && (await q("SELECT 1 FROM sales_deductions WHERE external_id=$1 AND (channel=ANY($2::text[]) OR channels ?| $2::text[]) LIMIT 1", [b.externalId, channels])).rows.length)
+        throw fail("Já existe uma saída com este identificador em um dos canais selecionados.", 409);
       const results = await plan(c, b, true);
       const k = id();
       const n = await one(
         c,
-        "INSERT INTO sales_deductions(id,channel,external_id,lines,user_id) VALUES($1,$2,$3,$4,$5) RETURNING *",
-        [k, b.channel, b.externalId, JSON.stringify(b.lines), u.id],
+        "INSERT INTO sales_deductions(id,channel,external_id,lines,user_id,channels) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
+        [k, b.channel, b.externalId || k, JSON.stringify(b.lines), u.id, JSON.stringify(channels)],
       );
       for (const l of results)
         await auto(
@@ -730,10 +801,10 @@ app.post("/api/commands/:type", async (r, s) => {
             l.item,
             -l.quantity,
             "STOCK_DEDUCTION",
-            `${b.channel} • ${b.externalId}`,
+            `${channels.join(", ")} • ${b.externalId || k}`,
           ),
         );
-      await audit("CREATE", "sales_deductions", k, b.externalId, null, n);
+      await audit("CREATE", "sales_deductions", k, b.externalId || k, null, n);
     }
     if (t === "recipe") {
       const k = b.id || id();
@@ -820,12 +891,25 @@ app.post("/api/commands/:type", async (r, s) => {
         next,
       );
     }
+    if (t === "deleteUser" || t === "user") {
+      await q("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE");
+      const actor = await one(c, "SELECT role,active,deleted_at FROM users WHERE id=$1", [u.id]);
+      if (!actor.active || actor.deleted_at || actor.role !== "ADM_MASTER")
+        throw fail("Sem permissão.", 403);
+    }
+    if (t === "deleteUser") {
+      if (b.id === u.id) throw fail("Você não pode excluir sua própria conta.");
+      const old = await one(c, "SELECT id,name,email,role,active FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", [b.id]);
+      await q("UPDATE users SET active=false, deleted_at=now() WHERE id=$1", [b.id]);
+      await q("DELETE FROM sessions WHERE user_id=$1", [b.id]);
+      await audit("DELETE", "users", b.id, old.name, old, { active: false, deleted: true });
+    }
     if (t === "user") {
       const k = b.id || id(),
         old = b.id
           ? await one(
               c,
-              "SELECT id,name,email,role,active FROM users WHERE id=$1 FOR UPDATE",
+              "SELECT id,name,email,role,active FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",
               [k],
             )
           : null;

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import readXlsxFile from "read-excel-file";
 import type { FormEvent, ReactNode } from "react";
 import {
   Plus,
@@ -15,7 +16,6 @@ import {
 } from "lucide-react";
 import {
   api,
-  categories,
   units,
   roleNames,
   money,
@@ -127,14 +127,149 @@ function QtyInput({
     />
   );
 }
+export function SecurityPanel() {
+  const [report, setReport] = useState<{ summary: { active_users: number; active_sessions: number; failed_logins: number; throttled_logins: number; pending_registrations: number }; events: { kind: string; created_at: string; name: string | null }[] } | null>(null);
+  const [error, setError] = useState("");
+  const load = () => { setError(""); void api<typeof report>("security").then(setReport).catch((e) => setError(explain(e))); };
+  useEffect(() => { load(); }, []);
+  const labels: Record<string, string> = { LOGIN_SUCCESS: "Login realizado", LOGIN_FAILURE: "Tentativa de login inválida", LOGIN_THROTTLED: "Limite de tentativas atingido" };
+  return <section className="panel padded stack">
+    <div className="panel-header"><div><h2>Painel de segurança</h2><p>Indicadores de acesso disponíveis apenas para o ADM Master.</p></div><Button onClick={load}>Atualizar</Button></div>
+    <ErrorText error={error} />
+    {!report && !error && <p>Carregando indicadores…</p>}
+    {report && <>
+      <div className="form-grid">
+        <p>Usuários ativos: <strong>{report.summary.active_users}</strong></p>
+        <p>Sessões ativas: <strong>{report.summary.active_sessions}</strong></p>
+        <p>Logins inválidos (24h): <strong>{report.summary.failed_logins}</strong></p>
+        <p>Limites atingidos (24h): <strong>{report.summary.throttled_logins}</strong></p>
+        <p>Cadastros pendentes: <strong>{report.summary.pending_registrations}</strong></p>
+      </div>
+      <p className="muted">Eventos são removidos periodicamente após 30 dias; falhas não registram e-mail, senha ou IP. O limite é local a cada processo e pode ser reiniciado ou variar entre instâncias. Este painel não detecta todas as ameaças.</p>
+      <h3>Últimos eventos de acesso</h3>
+      <div className="list">{report.events.map((event, i) => <div className="list-row" key={i}><span>{labels[event.kind] || event.kind}{event.name ? ` · ${event.name}` : ""}</span><small>{date(event.created_at)}</small></div>)}</div>
+      {!report.events.length && <Empty>Ainda não há eventos registrados.</Empty>}
+    </>}
+  </section>;
+}
+type StockImportRow = { name: string; pdvCode: string; quantity: number; category: string; unit: string; itemId: string | null | "review" };
+export function StockImport({ data, cmd }: { data: State; cmd: Command }) {
+  const [rows, setRows] = useState<string[][] | null>(null);
+  const [filename, setFilename] = useState("");
+  const [nameCol, setNameCol] = useState("");
+  const [codeCol, setCodeCol] = useState("");
+  const [qtyCol, setQtyCol] = useState("");
+  const [unitCol, setUnitCol] = useState("");
+  const [categoryCol, setCategoryCol] = useState("");
+  const [category, setCategory] = useState(data.categories?.[0] || "");
+  const [defaultUnit, setDefaultUnit] = useState("un");
+  const [review, setReview] = useState<StockImportRow[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const columns = rows?.[0] || [];
+  const options = columns.map((label, index) => <option key={index} value={String(index)}>{label || `Coluna ${index + 1}`}</option>);
+  function prepare() {
+    try {
+      if (!rows || nameCol === "" || qtyCol === "" || nameCol === qtyCol) throw new Error("Selecione colunas diferentes para nome e quantidade.");
+      if (!category) throw new Error("Escolha a categoria para novos insumos.");
+      const values = rows.slice(1).filter((row) => row.some(Boolean)).map((row, index) => {
+        const name = (row[Number(nameCol)] || "").trim();
+        const pdvCode = codeCol === "" ? "" : (row[Number(codeCol)] || "").trim();
+        const rawQty = (row[Number(qtyCol)] || "").trim().replace(",", ".");
+        const quantity = Number(rawQty);
+        const unit = unitCol === "" ? defaultUnit : (row[Number(unitCol)] || "").trim();
+        const rowCategory = categoryCol === "" ? category : (row[Number(categoryCol)] || "").trim();
+        if (!name || name.length > 150 || pdvCode.length > 150 || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1000000 || Math.abs(quantity * 1000 - Math.round(quantity * 1000)) > 0.00001 || !units.includes(unit) || !data.categories.includes(rowCategory)) throw new Error(`Revise nome, código, categoria, unidade e quantidade da linha ${index + 2}.`);
+        const byCode = pdvCode ? data.items.find((item) => item.pdv_code === pdvCode) : undefined;
+        const byName = data.items.filter((item) => item.name.trim().toLocaleLowerCase("pt-BR") === name.toLocaleLowerCase("pt-BR"));
+        return { name, pdvCode, quantity, category: rowCategory, unit, itemId: byCode?.id || (byName.length ? "review" as const : null) };
+      });
+      if (!values.length) throw new Error("Não há linhas de dados na planilha.");
+      setReview(values); setError("");
+    } catch (e) { setError(explain(e)); }
+  }
+  return <section className="panel padded stack">
+    <h2>Importar insumos do Excel</h2>
+    <p className="muted">Selecione as colunas na primeira aba, revise os vínculos e confirme. As quantidades serão somadas, não substituídas.</p>
+    <Field label="Arquivo Excel (.xlsx)"><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={async (event) => {
+      setRows(null); setReview(null); setError(""); setFilename(""); setNameCol(""); setCodeCol(""); setQtyCol(""); setUnitCol(""); setCategoryCol("");
+      const file = event.target.files?.[0]; if (!file) return;
+      try {
+        if (!/\.xlsx$/i.test(file.name) || file.size > 256000) throw new Error("Selecione um arquivo .xlsx de até 256 KB.");
+        const loaded = await readXlsxFile(file);
+        if (loaded.length < 2 || loaded.length > 201 || loaded[0].length > 100) throw new Error("Use cabeçalho e até 200 linhas de dados e 100 colunas.");
+        setRows(loaded.map((row) => row.map((cell) => cell == null ? "" : String(cell).trim()))); setFilename(file.name);
+      } catch (e) { setError(explain(e)); }
+    }} /></Field>
+    {rows && <>
+      <p>{filename}</p>
+      <div className="form-grid">
+        <Field label="Coluna do nome"><select value={nameCol} onChange={(event) => { setNameCol(event.target.value); setReview(null); }}><option value="">Selecione</option>{options}</select></Field>
+        <Field label="Coluna de quantidade"><select value={qtyCol} onChange={(event) => { setQtyCol(event.target.value); setReview(null); }}><option value="">Selecione</option>{options}</select></Field>
+        <Field label="Coluna do código PDV (opcional)"><select value={codeCol} onChange={(event) => { setCodeCol(event.target.value); setReview(null); }}><option value="">Sem código</option>{options}</select></Field>
+        <Field label="Coluna da unidade (opcional)"><select value={unitCol} onChange={(event) => { setUnitCol(event.target.value); setReview(null); }}><option value="">Usar unidade padrão</option>{options}</select></Field>
+        <Field label="Coluna da categoria (opcional)"><select value={categoryCol} onChange={(event) => { setCategoryCol(event.target.value); setReview(null); }}><option value="">Usar categoria padrão</option>{options}</select></Field>
+        <Field label="Unidade padrão"><select value={defaultUnit} onChange={(event) => { setDefaultUnit(event.target.value); setReview(null); }}>{units.map((unit) => <option key={unit}>{unit}</option>)}</select></Field>
+        <Field label="Categoria para novos insumos"><select value={category} onChange={(event) => { setCategory(event.target.value); setReview(null); }}><option value="">Selecione</option>{(data.categories || []).map((name) => <option key={name}>{name}</option>)}</select></Field>
+      </div>
+      <small>Para manter zeros à esquerda, salve os códigos como texto no Excel. Valores aceitos de unidade: {units.join(", ")}.</small>
+      <Button onClick={prepare}>Preparar revisão</Button>
+    </>}
+    {review && <>
+      <h3>Revise cada vínculo antes de importar</h3>
+      {review.map((row, index) => <div className="list-row" key={index}>
+        <div><strong>{row.name}</strong><small>{row.pdvCode || "Sem código"} · +{num(row.quantity)} {row.unit}</small></div>
+        <Field label={`Destino de ${row.name}`}><select value={row.itemId ?? "__new"} onChange={(event) => setReview((old) => old!.map((value, i) => i === index ? { ...value, itemId: event.target.value === "__new" ? null : event.target.value } : value))}>
+          {row.itemId === "review" && <option value="review" disabled>Confirme o vínculo por nome</option>}
+          <option value="__new">Cadastrar novo insumo</option>
+          {data.items.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.pdv_code || "sem código"} · {item.unit}</option>)}
+        </select></Field>
+      </div>)}
+      <Button kind="primary" disabled={busy || review.some((row) => row.itemId === "review")} onClick={async () => {
+        setError(""); setBusy(true);
+        try {
+          if (await cmd("importStock", { rows: review })) { setRows(null); setReview(null); setFilename(""); }
+        } catch (e) { setError(explain(e)); } finally { setBusy(false); }
+      }}>Confirmar importação</Button>
+    </>}
+    <ErrorText error={error} />
+  </section>;
+}
+export function CategoryManager({ categories, cmd }: { categories: string[]; cmd: Command }) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  return <section className="panel padded">
+    <h2>Categorias de insumos</h2>
+    <p className="muted">Categorias vinculadas a insumos não podem ser excluídas.</p>
+    <form className="form" onSubmit={async (event) => {
+      event.preventDefault(); setError("");
+      try { if (await cmd("categoryCreate", { name: forms.text.parse(name) })) setName(""); }
+      catch (e) { setError(explain(e)); }
+    }}>
+      <Field label="Nova categoria"><input value={name} onChange={(event) => setName(event.target.value)} maxLength={150} required /></Field>
+      <Button type="submit">Criar categoria</Button>
+    </form>
+    <ErrorText error={error} />
+    <div className="list">{categories.map((category) => <div className="list-row" key={category}>
+      <strong>{category}</strong>
+      <Button onClick={async () => {
+        if (!window.confirm(`Excluir a categoria ${category}?`)) return;
+        setError("");
+        try { await cmd("categoryDelete", { name: category }); } catch (e) { setError(explain(e)); }
+      }}><Trash2 size={15} /> Excluir</Button>
+    </div>)}</div>
+  </section>;
+}
 export function ItemForm({
   item,
   master,
+  categories,
   cmd,
   close,
 }: {
   item?: Item;
   master: boolean;
+  categories: string[];
   cmd: Command;
   close: () => void;
 }) {
@@ -149,6 +284,7 @@ export function ItemForm({
               id: item?.id,
               version: item?.updated_at,
               name: forms.text.parse(str(f, "name")),
+              pdvCode: str(f, "pdvCode"),
               category: str(f, "category"),
               unit: str(f, "unit"),
               current: qty(f, "current"),
@@ -187,6 +323,7 @@ export function ItemForm({
             defaultValue={item?.name}
           />
         </Field>
+        <Field label="Código PDV / Consumer (opcional)"><input name="pdvCode" maxLength={150} defaultValue={item?.pdv_code || ""} /></Field>
         <div className="form-grid">
           <Field label="Categoria">
             <select name="category" defaultValue={item?.category}>
@@ -336,11 +473,17 @@ function LocationForm({
   item,
   cmd,
   close,
+  types = [],
 }: {
   item?: Location;
   cmd: Command;
   close: () => void;
+  types?: string[];
 }) {
+  const [type, setType] = useState(item?.type || names[0]);
+  const [latitude, setLatitude] = useState(item?.latitude == null ? "" : String(item.latitude));
+  const [longitude, setLongitude] = useState(item?.longitude == null ? "" : String(item.longitude));
+  const [geoError, setGeoError] = useState("");
   return (
     <Modal
       title={item ? "Editar local" : "Novo local de compra"}
@@ -353,8 +496,11 @@ function LocationForm({
             await cmd("location", {
               id: item?.id,
               name: forms.text.parse(str(f, "name")),
-              type: str(f, "type"),
+              type: type === "__new" ? forms.text.parse(str(f, "newType")) : type,
               neighborhood: forms.text.parse(str(f, "neighborhood")),
+              address: str(f, "address"),
+              latitude: latitude.trim() ? Number(latitude) : null,
+              longitude: longitude.trim() ? Number(longitude) : null,
               notes: str(f, "notes"),
             })
           )
@@ -365,12 +511,26 @@ function LocationForm({
           <input name="name" required defaultValue={item?.name} />
         </Field>
         <Field label="Tipo">
-          <select name="type" defaultValue={item?.type}>
-            {names.map((n) => (
-              <option key={n}>{n}</option>
-            ))}
+          <select value={type} onChange={(e) => setType(e.target.value)}>
+            {[...new Set([...names, ...types, ...(item ? [item.type] : [])])].map((n) => <option key={n}>{n}</option>)}
+            <option value="__new">Criar novo tipo</option>
           </select>
         </Field>
+        {type === "__new" && <Field label="Nome do novo tipo"><input name="newType" required maxLength={150} /></Field>}
+        <Field label="Endereço (opcional)"><input name="address" maxLength={300} defaultValue={item?.address || ""} /></Field>
+        <div className="form-grid">
+          <Field label="Latitude (opcional)"><input type="number" step="any" min="-90" max="90" value={latitude} onChange={(e) => setLatitude(e.target.value)} /></Field>
+          <Field label="Longitude (opcional)"><input type="number" step="any" min="-180" max="180" value={longitude} onChange={(e) => setLongitude(e.target.value)} /></Field>
+        </div>
+        <Button onClick={() => {
+          if (!navigator.geolocation) { setGeoError("Localização indisponível neste dispositivo."); return; }
+          setGeoError("");
+          navigator.geolocation.getCurrentPosition((position) => {
+            setLatitude(String(position.coords.latitude));
+            setLongitude(String(position.coords.longitude));
+          }, () => setGeoError("Não foi possível obter sua localização. Confira a permissão do navegador e o GPS."), { timeout: 15000 });
+        }}>Usar minha localização atual</Button>
+        <ErrorText error={geoError} />
         <Field label="Bairro / cidade">
           <input
             name="neighborhood"
@@ -426,6 +586,8 @@ export function Locations({ data, cmd }: { data: State; cmd: Command }) {
                 <strong>{l.name}</strong>
                 <small>
                   {l.type} · {l.neighborhood_city}
+                  {l.address && ` · ${l.address}`}
+                  {l.latitude != null && l.longitude != null && ` · ${l.latitude.toFixed(5)}, ${l.longitude.toFixed(5)}`}
                   {l.notes && ` · ${l.notes}`}
                 </small>
               </div>
@@ -443,6 +605,7 @@ export function Locations({ data, cmd }: { data: State; cmd: Command }) {
         <LocationForm
           item={edit === true ? undefined : edit}
           cmd={cmd}
+          types={data.locations.map((location) => location.type)}
           close={() => setEdit(null)}
         />
       )}
@@ -568,6 +731,7 @@ function LineForm({
           </Field>
         </div>
         {signal && <Badge tone={signal[0]}>{signal[1]}</Badge>}
+        {min && <p className="muted">Menor preço registrado: {money(min.unit_price_cents)} / {item.unit} em {min.location_name}.</p>}
         {last && (
           <p className="muted">
             Última compra: {money(last.unit_price_cents)} / {item.unit} em{" "}
@@ -592,8 +756,11 @@ export function Cart({
   const [lines, setLines] = useState<Line[]>(saved.lines),
     [locationId, setLocationId] = useState(saved.locationId),
     [locationModal, setLocationModal] = useState(false),
+    [newRequestItem, setNewRequestItem] = useState(""),
+    [requestBusy, setRequestBusy] = useState(false),
     [edit, setEdit] = useState<Req | null>(null),
     [checkout, setCheckout] = useState(false),
+    [confirmed, setConfirmed] = useState<string[]>([]),
     [discount, setDiscount] = useState(""),
     [fee, setFee] = useState(""),
     [error, setError] = useState(""),
@@ -607,6 +774,8 @@ export function Cart({
   const getItem = (r?: Req) => data.items.find((i) => i.id === r?.item_id);
   const getReq = (id: string) => data.requests.find((r) => r.id === id);
   const sum = lines.reduce((a, l) => a + l.total, 0);
+  const confirmedLines = lines.filter((line) => confirmed.includes(line.requestId));
+  const confirmedSum = confirmedLines.reduce((sum, line) => sum + line.total, 0);
   const disc = readMoney(discount),
     extra = readMoney(fee);
   const total = sum - (disc || 0) + (extra || 0);
@@ -675,6 +844,18 @@ export function Cart({
       <ErrorText error={error} />
       {tab === "pending" && (
         <>
+          {canBuy && <section className="panel padded stack">
+            <h2>Adicionar insumo à lista</h2>
+            <p className="muted">Escolha um insumo cadastrado para adicioná-lo à lista de compras.</p>
+            <Field label="Insumo cadastrado"><select value={newRequestItem} onChange={(event) => setNewRequestItem(event.target.value)}>
+              <option value="">Selecione</option>{data.items.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.unit}</option>)}
+            </select></Field>
+            <Button disabled={!newRequestItem || requestBusy} onClick={async () => {
+              setRequestBusy(true); setError("");
+              try { if (await cmd("request", { itemId: newRequestItem, urgent: false, notes: "Adicionado pelo comprador" })) setNewRequestItem(""); }
+              catch (e) { setError(explain(e)); } finally { setRequestBusy(false); }
+            }}>Adicionar à lista</Button>
+          </section>}
           <div className="section-title">
             <h2>Itens para comprar</h2>
             {canBuy && (
@@ -688,7 +869,7 @@ export function Cart({
               <Empty>Não há solicitações disponíveis.</Empty>
             </section>
           )}
-          {categories.map((cat) => {
+          {(data.categories || []).map((cat) => {
             const list = pending.filter((r) => getItem(r)?.category === cat);
             return (
               list.length > 0 && (
@@ -880,6 +1061,7 @@ export function Cart({
             disabled={!lines.length}
             onClick={() => {
               setError("");
+              setConfirmed([]);
               setCheckout(true);
             }}
           >
@@ -888,7 +1070,7 @@ export function Cart({
         </div>
       )}
       {locationModal && (
-        <LocationForm cmd={cmd} close={() => setLocationModal(false)} />
+        <LocationForm cmd={cmd} types={data.locations.map((location) => location.type)} close={() => setLocationModal(false)} />
       )}{" "}
       {edit && getItem(edit) && (
         <LineForm
@@ -909,18 +1091,19 @@ export function Cart({
               if (!locationId) throw new Error("Selecione um local de compra.");
               forms.price.parse(disc);
               forms.price.parse(extra);
-              if (disc > sum)
-                throw new Error("O desconto não pode superar o subtotal.");
+              if (!confirmedLines.length) throw new Error("Selecione os itens que foram comprados.");
+              if (disc > confirmedSum)
+                throw new Error("O desconto não pode superar o subtotal dos itens confirmados.");
               if (
                 await cmd("purchase", {
                   locationId,
-                  lines,
+                  lines: confirmedLines,
                   discount: disc,
                   fee: extra,
-                  updateStock: f.get("update") === "on",
+                  updateStock: true,
                 })
               ) {
-                setLines([]);
+                setLines((old) => old.filter((line) => !confirmed.includes(line.requestId)));
                 setDiscount("");
                 setFee("");
                 setCheckout(false);
@@ -951,13 +1134,18 @@ export function Cart({
                 />
               </Field>
             </div>
-            <label className="check">
-              <input type="checkbox" name="update" defaultChecked /> Dar entrada
-              nas quantidades no estoque
-            </label>
+            <h3>Confirme os itens comprados</h3>
+            <p className="muted">Somente os itens marcados entrarão no estoque; os demais permanecem no carrinho.</p>
+            {lines.map((line) => {
+              const item = getItem(getReq(line.requestId));
+              return <label className="check" key={line.requestId}>
+                <input type="checkbox" checked={confirmed.includes(line.requestId)} onChange={(event) => setConfirmed((current) => event.target.checked ? [...current, line.requestId] : current.filter((id) => id !== line.requestId))} />
+                {item?.name || "Solicitação indisponível"} · {num(line.quantity)} {item?.unit} · {money(line.total)}
+              </label>;
+            })}
             <div className="checkout-total">
-              <span>Subtotal: {money(sum)}</span>
-              <strong>Total {money(total)}</strong>
+              <span>Subtotal confirmado: {money(confirmedSum)}</span>
+              <strong>Total {money(confirmedSum - (disc || 0) + (extra || 0))}</strong>
             </div>
           </Form>
         </Modal>
@@ -1158,7 +1346,9 @@ function importSales(raw: string) {
   });
 }
 export function Sales({ data, cmd }: { data: State; cmd: Command }) {
-  const [channel, setChannel] = useState("MenuDino"),
+  const [directItemId, setDirectItemId] = useState(""),
+    [directItem, setDirectItem] = useState<Item | null>(null),
+    [channels, setChannels] = useState<string[]>(["Consumer"]),
     [externalId, setExternal] = useState(""),
     [code, setCode] = useState(data.recipes[0]?.consumer_code || ""),
     [count, setCount] = useState("1"),
@@ -1167,6 +1357,9 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
       { code: string; quantity: number }[] | null
     >(null),
     [filename, setFilename] = useState(""),
+    [excelRows, setExcelRows] = useState<string[][] | null>(null),
+    [codeColumn, setCodeColumn] = useState(""),
+    [quantityColumn, setQuantityColumn] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [preview, setPreview] = useState<{ item: Item; quantity: number }[] | null>(
@@ -1174,7 +1367,8 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
     );
   const allowManual = data.settings?.allow_manual_in_sales ?? true;
   const body = {
-    channel,
+    channel: channels[0],
+    channels,
     externalId,
     includeManual: allowManual && includeManual,
     lines: imported || [{ code, quantity: Number(count) }],
@@ -1190,6 +1384,18 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
           </p>
         </div>
       </div>
+      <div className="padded stack">
+        <h3>Saída direta de insumo</h3>
+        <p className="muted">Para baixar um insumo sem ficha técnica, selecione-o e confirme a quantidade e o motivo.</p>
+        <Field label="Insumo do estoque">
+          <select value={directItemId} onChange={(e) => setDirectItemId(e.target.value)}>
+            <option value="">Selecione um insumo</option>
+            {data.items.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name} · {num(item.current_stock)} {item.unit}</option>)}
+          </select>
+        </Field>
+        <Button disabled={!directItemId} onClick={() => setDirectItem(data.items.find((item) => item.id === directItemId) || null)}>Registrar saída de insumo</Button>
+      </div>
+      {directItem && <StockAction item={directItem} type="deduct" cmd={cmd} close={() => setDirectItem(null)} />}
       <form
         className="form padded"
         onChange={() => setPreview(null)}
@@ -1203,6 +1409,7 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
                 setPreview(null);
                 setExternal("");
                 setImported(null);
+                setExcelRows(null);
                 setFilename("");
               }
             } else setPreview(await api("preview-sale", body));
@@ -1214,27 +1421,24 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
         }}
       >
         <div className="form-grid">
-          <Field label="Canal de venda">
-            <select
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-            >
-              {["MenuDino", "99Food", "iFood"].map((c) => (
-                <option key={c}>{c}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Identificador único do pedido ou lote">
+          <fieldset>
+            <legend>Canal(is) de venda</legend>
+            {["Consumer", "MenuDino", "99Food", "iFood"].map((channel) => <label className="check" key={channel}>
+              <input type="checkbox" checked={channels.includes(channel)} disabled={channels.length === 1 && channels.includes(channel)} onChange={(event) => setChannels((current) => event.target.checked ? [...current, channel] : current.filter((value) => value !== channel))} /> {channel}
+            </label>)}
+            <small className="muted">Os canais identificam o mesmo lote; não importe as mesmas vendas novamente por outro canal.</small>
+          </fieldset>
+          <Field label="Identificador único do pedido ou lote (opcional)">
             <input
               value={externalId}
               onChange={(e) => setExternal(e.target.value)}
-              required
               maxLength={150}
               placeholder="Ex.: IFD-20261119-001"
             />
           </Field>
         </div>
-        {!imported && (
+        {!externalId.trim() && <p className="muted">Sem identificador, uma nova confirmação do mesmo pedido não será reconhecida como duplicada.</p>}
+        {!imported && !excelRows && (
           <div className="form-grid">
             <Field label="Produto / ficha técnica">
               <select
@@ -1262,22 +1466,29 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
             </Field>
           </div>
         )}
-        <Field label="Importar CSV ou XML">
+        <Field label="Importar Excel (.xlsx), CSV ou XML">
           <input
             key={filename ? "loaded" : "fresh"}
             type="file"
-            accept=".csv,.xml,text/csv,text/xml,application/xml"
+            accept=".xlsx,.csv,.xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/xml,application/xml"
             onChange={async (e) => {
               setError("");
               setPreview(null);
               setImported(null);
+              setExcelRows(null);
+              setCodeColumn("");
+              setQuantityColumn("");
               setFilename("");
               const f = e.target.files?.[0];
               if (f)
                 try {
                   if (f.size > 256000)
                     throw new Error("Use arquivos de até 256 KB.");
-                  setImported(importSales(await f.text()));
+                  if (/\.xlsx$/i.test(f.name)) {
+                    const rows = await readXlsxFile(f);
+                    if (rows.length < 2 || rows.length > 201 || rows[0].length > 100) throw new Error("Use uma planilha com cabeçalho e até 200 linhas de dados e 100 colunas.");
+                    setExcelRows(rows.map((row) => row.map((cell) => cell == null ? "" : String(cell).trim())));
+                  } else setImported(importSales(await f.text()));
                   setFilename(f.name);
                 } catch (e) {
                   setError(explain(e));
@@ -1285,6 +1496,26 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
             }}
           />
         </Field>
+        {excelRows && !imported && <div className="stack info-box">
+          <p>{filename}: escolha as colunas na primeira aba da planilha.</p>
+          <Field label="Coluna do código PDV / ficha técnica"><select value={codeColumn} onChange={(event) => setCodeColumn(event.target.value)}><option value="">Selecione</option>{excelRows[0].map((name, index) => <option key={index} value={String(index)}>{name || `Coluna ${index + 1}`}</option>)}</select></Field>
+          <Field label="Coluna de quantidade"><select value={quantityColumn} onChange={(event) => setQuantityColumn(event.target.value)}><option value="">Selecione</option>{excelRows[0].map((name, index) => <option key={index} value={String(index)}>{name || `Coluna ${index + 1}`}</option>)}</select></Field>
+          <Button onClick={() => {
+            try {
+              if (codeColumn === "" || quantityColumn === "" || codeColumn === quantityColumn) throw new Error("Selecione colunas diferentes para código e quantidade.");
+              const parsed = excelRows.slice(1).filter((row) => row.some((value) => value !== "")).map((row, index) => {
+                const code = row[Number(codeColumn)]?.trim() || "";
+                const quantity = Number(row[Number(quantityColumn)]?.trim() || "");
+                if (!code || !Number.isInteger(quantity) || quantity < 1 || quantity > 10000) throw new Error(`Código ou quantidade inválida na linha ${index + 2}.`);
+                return { code, quantity };
+              });
+              if (!parsed.length) throw new Error("A planilha não contém linhas de dados.");
+              setImported(parsed); setError("");
+            } catch (e) { setError(explain(e)); }
+          }}>Usar colunas selecionadas</Button>
+          <small>Para preservar zeros à esquerda, formate o código como texto no Excel.</small>
+          <Button onClick={() => { setExcelRows(null); setFilename(""); setError(""); }}>Cancelar importação</Button>
+        </div>}
         {imported ? (
           <div className="info-box">
             {filename} · {imported.length} linha(s){" "}
@@ -1293,6 +1524,7 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
               className="link"
               onClick={() => {
                 setImported(null);
+                setExcelRows(null);
                 setFilename("");
                 setPreview(null);
               }}
@@ -1348,7 +1580,7 @@ export function Sales({ data, cmd }: { data: State; cmd: Command }) {
         )}
         <ErrorText error={error} />
         <div className="form-actions">
-          <Button type="submit" kind="primary" disabled={busy}>
+          <Button type="submit" kind="primary" disabled={busy || (!!excelRows && !imported)}>
             <FileUp size={17} />{" "}
             {preview ? "Confirmar e baixar estoque" : "Calcular prévia"}
           </Button>
@@ -1726,6 +1958,14 @@ export function UsersView({ data, cmd }: { data: State; cmd: Command }) {
               <Button onClick={() => setEdit(u)}>
                 <Pencil size={15} /> Editar
               </Button>
+              {u.id !== data.user.id && (
+                <Button onClick={() => {
+                  if (window.confirm(`Excluir o acesso de ${u.name}? O histórico será preservado.`))
+                    void cmd("deleteUser", { id: u.id });
+                }}>
+                  <Trash2 size={15} /> Excluir
+                </Button>
+              )}
             </div>
           ))}
         </div>

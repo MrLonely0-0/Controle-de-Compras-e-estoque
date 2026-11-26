@@ -307,3 +307,164 @@ test("cadastro exige aprovação Master e aplica as permissões do perfil escolh
     401,
   );
 });
+
+test("exclusão de usuário revoga sessões e preserva auditoria", async () => {
+  const email = `exclusao-${randomUUID()}@example.com`;
+  assert.equal((await command(master, "user", { name: "Conta removível", email, password: "SenhaMuitoSegura123!", role: "OPERADOR", active: true })).status, 200);
+  const target = (await state(master)).users.find((u) => u.email === email);
+  assert.ok(target);
+  const login = await call("login", { body: { email, password: "SenhaMuitoSegura123!" } });
+  assert.equal(login.status, 200);
+  assert.equal((await command(operator, "deleteUser", { id: target.id })).status, 403);
+  assert.equal((await command(master, "deleteUser", { id: (await state(master)).user.id })).status, 400);
+  assert.equal((await command(master, "deleteUser", { id: target.id })).status, 200);
+  assert.equal((await call("state", { cookie: login.cookie })).status, 401);
+  assert.equal((await call("login", { body: { email, password: "SenhaMuitoSegura123!" } })).status, 401);
+  const updated = await state(master);
+  assert.equal(updated.users.some((u) => u.id === target.id), false);
+  assert.ok(updated.audit.some((a) => a.entity_id === target.id && a.action === "DELETE"));
+  assert.equal((await command(master, "user", { id: target.id, name: "Reativação", email, role: "OPERADOR", active: true })).status, 404);
+});
+
+test("versão disponível do desktop é pública e ignora valores inválidos", async () => {
+  const r = await call("desktop-version");
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { version: null });
+});
+
+test("comparação de versões de desktop", async () => {
+  const { newerVersion, shouldNotify } = await import("../desktop/update.cjs");
+  assert.equal(newerVersion("1.10.0", "1.9.0"), true);
+  assert.equal(newerVersion("2.0.0", "1.99.99"), true);
+  assert.equal(newerVersion("1.0.0", "1.0.0"), false);
+  assert.equal(newerVersion("0.9.0", "1.0.0"), false);
+  assert.equal(newerVersion("1.0.1-beta", "1.0.0"), false);
+  assert.equal(newerVersion("1.00.1", "1.0.0"), false);
+  const previous = { version: "1.0.2", origin: "https://example.com", at: 1000 };
+  assert.equal(shouldNotify("1.0.2", "1.0.2", previous.origin, null), false);
+  assert.equal(shouldNotify("1.0.2", "1.0.1", previous.origin, previous, 2000), false);
+  assert.equal(shouldNotify("1.0.3", "1.0.1", previous.origin, previous, 2000), true);
+  assert.equal(shouldNotify("1.0.2", "1.0.1", previous.origin, previous, 86401000), true);
+});
+
+test("categorias personalizadas validam permissão e preservam itens vinculados", async () => {
+  const name = `Categoria ${randomUUID()}`;
+  assert.equal((await command(operator, "categoryCreate", { name })).status, 403);
+  assert.equal((await command(admin, "categoryCreate", { name })).status, 200);
+  assert.equal((await command(admin, "categoryCreate", { name: name.toLowerCase() })).status, 409);
+  assert.ok((await state(master)).categories.includes(name));
+  assert.equal((await command(admin, "item", { name: "Insumo especial", category: name, unit: "un", current: 5, min: 0, ideal: 1, mode: "MANUAL", active: true })).status, 200);
+  assert.equal((await command(master, "categoryDelete", { name })).status, 409);
+  const item = (await state(master)).items.find((i) => i.name === "Insumo especial");
+  assert.ok(item);
+  assert.equal((await command(operator, "deduct", { itemId: item.id, quantity: 2, notes: "Saída direta" })).status, 200);
+  assert.equal(Number((await state(master)).items.find((i) => i.id === item.id).current_stock), 3);
+  assert.equal((await command(master, "deleteItem", { id: item.id })).status, 200);
+  assert.equal((await command(master, "categoryDelete", { name })).status, 200);
+  assert.equal((await state(master)).categories.includes(name), false);
+});
+
+test("locais aceitam tipo personalizado e coordenadas, rejeitando coordenadas incompletas", async () => {
+  const name = `Fornecedor ${randomUUID()}`;
+  const location = { name, type: "Feira local", neighborhood: "Recife", address: "Rua Exemplo", latitude: -8.05, longitude: -34.9, notes: "" };
+  assert.equal((await command(buyer, "location", { ...location, longitude: null })).status, 400);
+  assert.equal((await command(buyer, "location", location)).status, 200);
+  const found = (await state(master)).locations.find((l) => l.name === name);
+  assert.equal(found.type, location.type);
+  assert.equal(found.address, location.address);
+  assert.equal(found.latitude, location.latitude);
+  assert.equal(found.longitude, location.longitude);
+  assert.equal((await command(admin, "location", { id: found.id, name, type: location.type, neighborhood: location.neighborhood, notes: "Editado sem apagar coordenadas" })).status, 200);
+  const updated = (await state(master)).locations.find((l) => l.id === found.id);
+  assert.equal(updated.latitude, location.latitude);
+  assert.equal(updated.address, location.address);
+});
+
+test("Consumer permite identificador opcional sem perder idempotência de operação", async () => {
+  const itemName = `Ingrediente ${randomUUID()}`;
+  const code = `PDV-${randomUUID()}`;
+  assert.equal((await command(master, "item", { name: itemName, category: "Mercearia", unit: "un", current: 5, min: 0, ideal: 1, mode: "AUTO", active: true })).status, 200);
+  const item = (await state(master)).items.find((i) => i.name === itemName);
+  assert.equal((await command(master, "recipe", { name: "Ficha teste", code, items: [{ itemId: item.id, quantity: 1 }] })).status, 200);
+  const body = { channel: "Consumer", lines: [{ code, quantity: 1 }] };
+  assert.equal((await call("preview-sale", { cookie: operator, body })).status, 200);
+  const op = randomUUID();
+  assert.equal((await command(operator, "sale", body, op)).status, 200);
+  assert.equal((await command(operator, "sale", body, op)).status, 200);
+  assert.equal(Number((await state(master)).items.find((i) => i.id === item.id).current_stock), 4);
+});
+
+test("painel de segurança é restrito ao Master e registra acessos sem senhas ou e-mails de falha", async () => {
+  assert.equal((await call("security")).status, 401);
+  assert.equal((await call("security", { cookie: admin })).status, 403);
+  assert.equal((await call("login", { body: { email: "nao-existe@example.com", password: "senha-invalida" } })).status, 401);
+  const response = await call("security", { cookie: master });
+  assert.equal(response.status, 200);
+  assert.ok(response.body.summary.failed_logins >= 1);
+  assert.ok(response.body.events.some((e) => e.kind === "LOGIN_FAILURE"));
+  assert.equal(JSON.stringify(response.body).includes("senha-invalida"), false);
+  assert.equal(JSON.stringify(response.body).includes("nao-existe@example.com"), false);
+});
+
+test("compra parcial atualiza somente insumos confirmados", async () => {
+  const make = async (name) => {
+    assert.equal((await command(master, "item", { name, category: "Mercearia", unit: "un", current: 2, min: 0, ideal: 3, mode: "MANUAL", active: true })).status, 200);
+    const item = (await state(master)).items.find((i) => i.name === name);
+    assert.equal((await command(operator, "request", { itemId: item.id, urgent: false, notes: "Compra parcial" })).status, 200);
+    const request = (await state(master)).requests.find((r) => r.item_id === item.id && r.status === "PENDING");
+    return { item, request };
+  };
+  const first = await make(`Comprado ${randomUUID()}`), second = await make(`Pendente ${randomUUID()}`);
+  const location = (await state(master)).locations[0];
+  const purchase = { locationId: location.id, discount: 0, fee: 0, updateStock: true, lines: [{ requestId: first.request.id, quantity: 3, unitPrice: 100, total: 300, priceBasis: "unit" }] };
+  assert.equal((await command(buyer, "purchase", purchase)).status, 200);
+  const result = await state(master);
+  assert.equal(Number(result.items.find((i) => i.id === first.item.id).current_stock), 5);
+  assert.equal(Number(result.items.find((i) => i.id === second.item.id).current_stock), 2);
+  assert.equal(result.requests.find((r) => r.id === first.request.id).status, "BOUGHT");
+  assert.equal(result.requests.find((r) => r.id === second.request.id).status, "PENDING");
+});
+
+test("importação de estoque cria e soma por vínculo, é transacional e idempotente", async () => {
+  const code = `COD-${randomUUID()}`;
+  const name = `Item importado ${randomUUID()}`;
+  const create = { itemId: null, name, pdvCode: code, quantity: 3, unit: "kg", category: "Mercearia" };
+  assert.equal((await command(operator, "importStock", { rows: [create] })).status, 403);
+  const operationId = randomUUID();
+  assert.equal((await command(master, "importStock", { rows: [create] }, operationId)).status, 200);
+  assert.equal((await command(master, "importStock", { rows: [create] }, operationId)).status, 200);
+  let item = (await state(master)).items.find((i) => i.pdv_code === code);
+  assert.ok(item);
+  assert.equal(Number(item.current_stock), 3);
+  const increment = { ...create, itemId: item.id, quantity: 2 };
+  assert.equal((await command(admin, "importStock", { rows: [increment] })).status, 200);
+  item = (await state(master)).items.find((i) => i.pdv_code === code);
+  assert.equal(Number(item.current_stock), 5);
+  assert.equal((await command(admin, "importStock", { rows: [increment, { ...increment, unit: "un", pdvCode: "" }] })).status, 400);
+  assert.equal((await command(admin, "importStock", { rows: [{ ...increment, unit: "un" }] })).status, 409);
+  assert.equal((await command(admin, "importStock", { rows: [{ ...create, name: "Código duplicado" }] })).status, 409);
+  assert.equal(Number((await state(master)).items.find((i) => i.id === item.id).current_stock), 5);
+});
+
+test("lote com vários canais registra apenas uma baixa e bloqueia repetição em canal sobreposto", async () => {
+  const itemName = `Ingrediente multicanal ${randomUUID()}`;
+  const code = `MULTI-${randomUUID()}`;
+  assert.equal((await command(master, "item", { name: itemName, category: "Mercearia", unit: "un", current: 8, min: 0, ideal: 1, mode: "AUTO", active: true })).status, 200);
+  const item = (await state(master)).items.find((i) => i.name === itemName);
+  assert.equal((await command(master, "recipe", { name: "Ficha múltiplos canais", code, items: [{ itemId: item.id, quantity: 1 }] })).status, 200);
+  const externalId = `PEDIDO-${randomUUID()}`;
+  const sale = { channel: "Consumer", channels: ["Consumer", "iFood"], externalId, lines: [{ code, quantity: 2 }] };
+  assert.equal((await command(operator, "sale", sale)).status, 200);
+  assert.equal(Number((await state(master)).items.find((i) => i.id === item.id).current_stock), 6);
+  assert.equal((await command(operator, "sale", { ...sale, channel: "iFood", channels: ["iFood"] })).status, 409);
+  assert.equal(Number((await state(master)).items.find((i) => i.id === item.id).current_stock), 6);
+});
+
+test("comprador pode solicitar insumo cadastrado, mas não alterar saldo por contagem", async () => {
+  const name = `Item do comprador ${randomUUID()}`;
+  assert.equal((await command(master, "item", { name, category: "Mercearia", unit: "un", current: 5, min: 0, ideal: 10, mode: "MANUAL", active: true })).status, 200);
+  const item = (await state(master)).items.find((i) => i.name === name);
+  assert.equal((await command(buyer, "request", { itemId: item.id, urgent: false, notes: "Compra" })).status, 200);
+  assert.equal((await command(buyer, "request", { itemId: item.id, remaining: 1, urgent: false, notes: "Não permitido" })).status, 403);
+  assert.equal(Number((await state(master)).items.find((i) => i.id === item.id).current_stock), 5);
+});
