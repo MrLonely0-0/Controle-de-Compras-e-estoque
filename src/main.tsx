@@ -34,11 +34,14 @@ import {
   ShieldCheck,
   FileDown,
 } from "lucide-react";
-import { api, read, store, roleNames, status, num, categories } from "./model";
+import { api, read, store, roleNames, status, num } from "./model";
 import type { State, Operation, Item, Role } from "./model";
 import { Button, Badge, CategoryIcon, Empty, Field, Modal } from "./ui";
 import {
   ItemForm,
+  CategoryManager,
+  StockImport,
+  SecurityPanel,
   StockAction,
   Cart,
   Prices,
@@ -92,6 +95,7 @@ const nav = [
     group: "ADMINISTRAÇÃO",
     links: [
       ["audit", "Log de auditoria", ShieldCheck, manager],
+      ["security", "Segurança", ShieldCheck, ["ADM_MASTER"]],
       ["users", "Usuários e acesso", Users, ["ADM_MASTER"]],
     ],
   },
@@ -104,12 +108,14 @@ const visible = (rs: readonly string[], r: Role) =>
   !rs.length || rs.includes(r);
 function Inventory({
   items,
+  categories,
   compact = false,
   onView,
   onAction,
   role,
 }: {
   items: Item[];
+  categories: string[];
   compact?: boolean;
   onView?: (filter?: string) => void;
   onAction: (v: Dialog) => void;
@@ -312,6 +318,12 @@ function Inventory({
   );
 }
 function App() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => read<string>("theme", "light") === "dark" ? "dark" : "light");
+  useEffect(() => { document.documentElement.dataset.theme = theme; store("theme", theme); }, [theme]);
+  const [desktopVersion, setDesktopVersion] = useState<string | null>(null);
+  useEffect(() => {
+    void window.estoqueDesktop?.version().then(setDesktopVersion).catch(() => {});
+  }, []);
   const [data, setData] = useState<State | null>(() => read("state", null));
   const [loading, setLoading] = useState(!data),
     [startupError, setStartupError] = useState(""),
@@ -673,6 +685,7 @@ function App() {
     locations: "Gerencie os estabelecimentos e fornecedores da sua operação.",
     recipes: "Vincule os produtos vendidos aos insumos da cozinha.",
     audit: "Consulte o histórico de alterações da operação.",
+    security: "Acompanhe indicadores e eventos de acesso.",
     users: "Gerencie contas, perfis e permissões de acesso.",
   };
   const logout = async () => {
@@ -743,7 +756,7 @@ function App() {
           <div className="side-status">
             <span className={online ? "dot" : "dot offline"} />
             {online ? "Sistema operacional" : "Modo offline"}
-            <span className="version">v1.0</span>
+            {desktopVersion && <span className="version">v{desktopVersion}</span>}
           </div>
         </div>
       </aside>
@@ -973,6 +986,7 @@ function App() {
                   <Inventory
                     compact
                     items={data.items}
+                    categories={data.categories || []}
                     role={me.role}
                     onAction={setDialog}
                     onView={() => go("inventory")}
@@ -1042,7 +1056,11 @@ function App() {
             </>
           )}
           {view === "inventory" && (
-            <Inventory items={data.items} role={me.role} onAction={setDialog} />
+            <div className="stack">
+              <Inventory items={data.items} categories={data.categories || []} role={me.role} onAction={setDialog} />
+              {manager.includes(me.role) && <StockImport data={data} cmd={cmd} />}
+              {manager.includes(me.role) && <CategoryManager categories={data.categories || []} cmd={cmd} />}
+            </div>
           )}
           {view === "shopping" && <Cart data={data} cmd={cmd} go={go} />}
           {view === "prices" && <Prices data={data} />}
@@ -1050,6 +1068,7 @@ function App() {
           {view === "sales" && <Sales data={data} cmd={cmd} />}
           {view === "recipes" && <Recipes data={data} cmd={cmd} />}
           {view === "audit" && <AuditView data={data} />}
+          {view === "security" && me.role === "ADM_MASTER" && <SecurityPanel />}
           {view === "users" && (
             <div className="stack">
               <RegistrationReview data={data} cmd={cmd} />
@@ -1063,6 +1082,7 @@ function App() {
         <ItemForm
           item={dialog.item}
           master={me.role === "ADM_MASTER"}
+          categories={data.categories || []}
           cmd={cmd}
           close={() => setDialog(null)}
         />
@@ -1112,6 +1132,11 @@ function App() {
             PWA, use a opção “Instalar app” ou “Adicionar à tela inicial” no
             menu do seu navegador.
           </p>
+          <Field label="Aparência neste dispositivo">
+            <select value={theme} onChange={(event) => setTheme(event.target.value === "dark" ? "dark" : "light")}>
+              <option value="light">Modo claro</option><option value="dark">Modo escuro</option>
+            </select>
+          </Field>
           {me.role === "ADM_MASTER" && <SettingsForm data={data} cmd={cmd} />}
           <Button onClick={logout}>
             <LogOut size={16} /> Sair da conta

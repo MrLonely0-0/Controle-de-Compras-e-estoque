@@ -9,4 +9,9 @@ function newerVersion(candidate, current) {
   }
   return false;
 }
-module.exports = { newerVersion };
+function shouldNotify(candidate, current, origin, previous, now = Date.now()) {
+  if (!newerVersion(candidate, current)) return false;
+  return !(previous && previous.version === candidate && previous.origin === origin &&
+    Number.isFinite(previous.at) && previous.at <= now && now - previous.at < 24 * 60 * 60 * 1000);
+}
+module.exports = { newerVersion, shouldNotify };

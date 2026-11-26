@@ -2,15 +2,42 @@ CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, name text NOT NULL, email
 ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE TABLE IF NOT EXISTS sessions (token text PRIMARY KEY, user_id text NOT NULL REFERENCES users(id), expires_at timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS items (id text PRIMARY KEY, name text NOT NULL, category text NOT NULL CHECK(category IN ('Embalagens','Proteínas','Hortifrúti','Mercearia','Bebidas','Molhos','Limpeza','Descartáveis')), unit text NOT NULL CHECK(unit IN ('un','kg','g','L','ml','cx','pct')), current_stock numeric(14,3) NOT NULL CHECK(current_stock>=0), min_stock numeric(14,3) NOT NULL CHECK(min_stock>=0), ideal_stock numeric(14,3) NOT NULL CHECK(ideal_stock>=min_stock), deduction_mode text NOT NULL CHECK(deduction_mode IN ('AUTO','MANUAL')), active boolean NOT NULL DEFAULT true, updated_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE items ADD COLUMN IF NOT EXISTS pdv_code text;
+CREATE UNIQUE INDEX IF NOT EXISTS items_pdv_code_uq ON items(pdv_code) WHERE pdv_code IS NOT NULL;
+CREATE TABLE IF NOT EXISTS category_catalog (name text PRIMARY KEY);
+CREATE UNIQUE INDEX IF NOT EXISTS category_catalog_lower_name_idx ON category_catalog(lower(name));
+CREATE TABLE IF NOT EXISTS schema_migrations (id text PRIMARY KEY);
+WITH initialized AS (INSERT INTO schema_migrations(id) VALUES ('categories_v1') ON CONFLICT DO NOTHING RETURNING id)
+INSERT INTO category_catalog(name) SELECT name FROM (VALUES ('Embalagens'),('Proteínas'),('Hortifrúti'),('Mercearia'),('Bebidas'),('Molhos'),('Limpeza'),('Descartáveis')) AS defaults(name) WHERE EXISTS (SELECT 1 FROM initialized) ON CONFLICT DO NOTHING;
+ALTER TABLE items DROP CONSTRAINT IF EXISTS items_category_check;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'items'::regclass AND conname = 'items_category_fk') THEN
+    ALTER TABLE items ADD CONSTRAINT items_category_fk FOREIGN KEY (category) REFERENCES category_catalog(name);
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS recipes (id text PRIMARY KEY, name text NOT NULL, consumer_code text UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS recipe_items (recipe_id text REFERENCES recipes(id) ON DELETE CASCADE, item_id text REFERENCES items(id), quantity numeric(14,3) NOT NULL CHECK(quantity>0), PRIMARY KEY(recipe_id,item_id));
 CREATE TABLE IF NOT EXISTS sales_deductions (id text PRIMARY KEY, channel text NOT NULL CHECK(channel IN ('MenuDino','99Food','iFood')), external_id text NOT NULL, lines jsonb NOT NULL, user_id text REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(channel,external_id));
+ALTER TABLE sales_deductions ADD COLUMN IF NOT EXISTS channels jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE sales_deductions DROP CONSTRAINT IF EXISTS sales_deductions_channel_check;
+ALTER TABLE sales_deductions ADD CONSTRAINT sales_deductions_channel_check CHECK(channel IN ('Consumer','MenuDino','99Food','iFood'));
 CREATE TABLE IF NOT EXISTS purchase_requests (id text PRIMARY KEY, item_id text NOT NULL REFERENCES items(id), request_type text NOT NULL CHECK(request_type IN ('BUY_ITEM','LOW_STOCK_X','AUTO_MIN_STOCK')), reported_remaining_qty numeric(14,3) CHECK(reported_remaining_qty>=0), suggested_qty numeric(14,3) NOT NULL CHECK(suggested_qty>=0), priority text NOT NULL CHECK(priority IN ('NORMAL','URGENTE')), notes text NOT NULL DEFAULT '', status text NOT NULL CHECK(status IN ('PENDING','IN_CART','BOUGHT','CANCELED')), requested_by_user_id text REFERENCES users(id), claimed_by_user_id text REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS locations (id text PRIMARY KEY, name text NOT NULL, type text NOT NULL CHECK(type IN ('Atacarejo','Supermercado','Distribuidora','Açougue','Embalagens','Hortifrúti')), neighborhood_city text NOT NULL, notes text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE locations DROP CONSTRAINT IF EXISTS locations_type_check;
+ALTER TABLE locations ADD COLUMN IF NOT EXISTS address text NOT NULL DEFAULT '';
+ALTER TABLE locations ADD COLUMN IF NOT EXISTS latitude double precision;
+ALTER TABLE locations ADD COLUMN IF NOT EXISTS longitude double precision;
 CREATE TABLE IF NOT EXISTS purchases (id text PRIMARY KEY, location_id text NOT NULL REFERENCES locations(id), buyer_user_id text NOT NULL REFERENCES users(id), subtotal_cents integer NOT NULL CHECK(subtotal_cents>=0), discount_cents integer NOT NULL CHECK(discount_cents>=0), extra_fee_cents integer NOT NULL CHECK(extra_fee_cents>=0), total_cents integer NOT NULL CHECK(total_cents=subtotal_cents-discount_cents+extra_fee_cents AND total_cents>=0), stock_updated boolean NOT NULL, status text NOT NULL CHECK(status IN ('DRAFT','COMPLETED')), completed_at timestamptz);
 CREATE TABLE IF NOT EXISTS purchase_items (id text PRIMARY KEY, purchase_id text NOT NULL REFERENCES purchases(id), item_id text NOT NULL REFERENCES items(id), location_id text NOT NULL REFERENCES locations(id), quantity numeric(14,3) NOT NULL CHECK(quantity>0), unit text NOT NULL CHECK(unit IN ('un','kg','g','L','ml','cx','pct')), unit_price_cents integer NOT NULL CHECK(unit_price_cents>=0), total_price_cents integer NOT NULL CHECK(total_price_cents>=0), created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY, user_id text REFERENCES users(id), user_name text NOT NULL, user_role text NOT NULL CHECK(user_role IN ('ADM_MASTER','ADM','OPERADOR','COMPRADOR')), action text NOT NULL CHECK(action IN ('CREATE','UPDATE','DELETE','REQUEST_PURCHASE','REPORT_STOCK_X','STOCK_DEDUCTION','COMPLETE_PURCHASE')), entity_type text NOT NULL, entity_id text NOT NULL, entity_name text NOT NULL, old_data jsonb, new_data jsonb, device_type text NOT NULL CHECK(device_type IN ('DESKTOP','MOBILE_WEB')), created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS operations (user_id text REFERENCES users(id), id text NOT NULL, PRIMARY KEY(user_id,id));
+CREATE TABLE IF NOT EXISTS security_events (
+  id text PRIMARY KEY,
+  kind text NOT NULL CHECK (kind IN ('LOGIN_SUCCESS','LOGIN_FAILURE','LOGIN_THROTTLED')),
+  user_id text REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS security_events_date_idx ON security_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS sessions_expiration_idx ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS request_status_idx ON purchase_requests(status,created_at);

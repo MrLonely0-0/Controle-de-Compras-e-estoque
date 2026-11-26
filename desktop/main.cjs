@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
-const { newerVersion } = require("./update.cjs");
+const { shouldNotify } = require("./update.cjs");
 const releasesUrl = "https://github.com/MrLonely0-0/Controle-de-Compras-e-estoque/releases/latest";
 const { readFileSync, writeFileSync, mkdirSync } = require("node:fs");
 const { join } = require("node:path");
@@ -98,16 +98,23 @@ async function checkDesktopUpdate(win, url) {
     });
     if (!response.ok) return;
     const { version } = await response.json();
-    if (typeof version !== "string" || !newerVersion(version, app.getVersion()) || win.isDestroyed()) return;
+    const noticePath = join(app.getPath("userData"), "update-notice.json");
+    let previous = null;
+    try { previous = JSON.parse(readFileSync(noticePath, "utf8")); } catch { /* no prior notice */ }
+    if (typeof version !== "string" || !shouldNotify(version, app.getVersion(), url.origin, previous) || win.isDestroyed()) return;
     const result = await dialog.showMessageBox(win, {
       type: "info",
       title: "Atualização disponível",
       message: `Uma nova versão do aplicativo Windows (${version}) está disponível.`,
-      detail: "Abra a página de downloads e instale a nova versão. Enquanto o repositório for privado, será necessário entrar no GitHub com acesso autorizado.",
+      detail: `Versão instalada: ${app.getVersion()}. Abra a página de downloads e instale a nova versão. Enquanto o repositório for privado, será necessário entrar no GitHub com acesso autorizado.`,
       buttons: ["Abrir downloads", "Depois"],
       defaultId: 0,
       cancelId: 1,
     });
+    try {
+      mkdirSync(app.getPath("userData"), { recursive: true });
+      writeFileSync(noticePath, JSON.stringify({ version, origin: url.origin, at: Date.now() }), { mode: 0o600 });
+    } catch (error) { console.warn("Não foi possível guardar preferência de aviso:", error.message); }
     if (result.response === 0) await shell.openExternal(releasesUrl);
   } catch (error) {
     // Offline or an older server: do not interrupt use of the app.
@@ -122,7 +129,7 @@ function openServer(url) {
     minHeight: 570,
     backgroundColor: "#171d2d",
     autoHideMenuBar: true,
-    webPreferences: prefs,
+    webPreferences: { ...prefs, preload: join(__dirname, "app-preload.cjs") },
   });
   guard(win, (target) => new URL(target).origin === url.origin, true);
   win.webContents.setUserAgent(
@@ -143,6 +150,7 @@ function openServer(url) {
     win.close();
   });
 }
+ipcMain.handle("desktop:version", () => app.getVersion());
 app.whenReady().then(() => {
   try {
     const value = config();

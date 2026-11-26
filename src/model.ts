@@ -10,6 +10,7 @@ export type User = {
 export type Item = {
   id: string;
   name: string;
+  pdv_code?: string | null;
   category: string;
   unit: string;
   current_stock: string;
@@ -37,6 +38,9 @@ export type Location = {
   type: string;
   neighborhood_city: string;
   notes: string;
+  address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 export type Price = {
   id: string;
@@ -81,6 +85,7 @@ export type Registration = {
   approved_role: Role | null;
 };
 export type State = {
+  categories: string[];
   registrations: Registration[];
   user: User;
   settings: { auto_min_requests: boolean; allow_manual_in_sales: boolean };
